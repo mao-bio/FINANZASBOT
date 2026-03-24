@@ -360,9 +360,18 @@ function App() {
       {activeTab === 'dashboard' && (
         <>
           <div className="stats-grid">
-            <div className="glass-panel stat-card"><h3>Ingresos Mensuales</h3><p className="stat-value value-positive">{formatCurrency(balance.ingresos)}</p></div>
-            <div className="glass-panel stat-card"><h3>Gastos Mensuales</h3><p className="stat-value value-negative">{formatCurrency(balance.gastos)}</p></div>
-            <div className="glass-panel stat-card"><h3>Dinero Restante</h3><p className="stat-value value-warning">{formatCurrency(balance.balance)}</p></div>
+            <div className="glass-panel stat-card income">
+               <h3>Ingresos Mensuales</h3>
+               <p className="stat-value value-positive">{formatCurrency(balance.ingresos)}</p>
+            </div>
+            <div className="glass-panel stat-card expense">
+               <h3>Gastos Mensuales</h3>
+               <p className="stat-value value-negative">{formatCurrency(balance.gastos)}</p>
+            </div>
+            <div className="glass-panel stat-card">
+               <h3>Dinero Restante</h3>
+               <p className="stat-value value-warning">{formatCurrency(balance.balance)}</p>
+            </div>
           </div>
           <div className="charts-grid">
             <div className="glass-panel chart-box">
