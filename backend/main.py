@@ -23,6 +23,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session
+
 async def fixed_expenses_cron():
     """ Tarea en segundo plano que revisa y aplica gastos fijos automáticamente al inicio del mes """
     print("⏳ Iniciando servicio automático de gastos fijos mensuales.")
@@ -86,19 +90,21 @@ async def get_balance(db: AsyncSession = Depends(get_db)):
     desglose_ingresos = {}
     desglose_gastos = {}
     
-    current_year = datetime.datetime.utcnow().year
-    current_month = datetime.datetime.utcnow().month
+    now = datetime.datetime.utcnow()
+    print(f"DEBUG: Buscando transacciones para {now.month}/{now.year}. Encontradas en DB: {len(transactions)}")
     
-    # Solo procesamos transacciones del mes actual para el dashboard, dando sentido a "Mes"
     for t in transactions:
-        if t.date.year == current_year and t.date.month == current_month:
-            amount = float(t.amount)
+        amount = float(t.amount)
+        # Filtro de mes/año actual
+        if t.date.year == now.year and t.date.month == now.month:
             if t.type == "ingreso":
                 total_ingresos += amount
                 desglose_ingresos[t.category] = desglose_ingresos.get(t.category, 0) + amount
             else:
                 total_gastos += amount
                 desglose_gastos[t.category] = desglose_gastos.get(t.category, 0) + amount
+        else:
+            print(f"DEBUG: Transacción ignorada por fecha: {t.description} ({t.date})")
     
     return {
         "ingresos": total_ingresos,

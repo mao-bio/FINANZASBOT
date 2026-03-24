@@ -36,54 +36,68 @@ from sqlalchemy import select, extract
 import datetime
 from models import Transaction, FixedExpense
 
-async def get_monthly_summary(session):
+async def get_enhanced_financial_context(session):
+    """ Genera un resumen hiper-detallado para que la IA actúe como un Coach Profesional """
     now = datetime.datetime.utcnow()
-    result = await session.execute(select(Transaction))
-    transactions = [t for t in result.scalars().all() if t.date.year == now.year and t.date.month == now.month]
-    
-    fe_result = await session.execute(select(FixedExpense))
-    fixed_expenses = fe_result.scalars().all()
-
-    ingresos = sum(t.amount for t in transactions if t.type == 'ingreso')
-    gastos = sum(t.amount for t in transactions if t.type == 'gasto')
-    gastos_cat = {}
-    for t in transactions:
-        if t.type == 'gasto':
-             gastos_cat[t.category] = gastos_cat.get(t.category, 0) + t.amount
-
-    summary = (
-        f"--- ESTADO FINANCIERO DEL MES ({now.month}/{now.year}) ---\n"
-        f"- Total Ingresos: ${ingresos:,.0f}\n"
-        f"- Total Gastos: ${gastos:,.0f}\n"
-        f"- Saldo Restante: ${(ingresos-gastos):,.0f}\n"
-        f"- Gastos por Categoría: {gastos_cat}\n"
-        f"- Gastos Fijos (Plantillas): {[fe.description + ' $' + str(fe.amount) for fe in fixed_expenses]}\n"
-        "--------------------------------------\n"
+    # Traemos todas las transacciones recientes (últimos 90 días para detectar tendencias)
+    three_months_ago = now - datetime.timedelta(days=90)
+    result = await session.execute(
+        select(Transaction).where(Transaction.date >= three_months_ago).order_by(Transaction.date.desc())
     )
-    return summary
+    all_recent_tx = result.scalars().all()
+    
+    # Datos del mes actual
+    current_tx = [t for t in all_recent_tx if t.date.year == now.year and t.date.month == now.month]
+    
+    # Estadísticas para el prompt
+    ingresos_hoy = sum(t.amount for t in current_tx if t.type == 'ingreso')
+    gastos_hoy = sum(t.amount for t in current_tx if t.type == 'gasto')
+    
+    # Categorización detallada
+    categorias = {}
+    for t in current_tx:
+        if t.type == 'gasto':
+            categorias[t.category] = categorias.get(t.category, 0) + t.amount
+            
+    # Comparativa rápida (Simplificada para no saturar tokens pero dar contexto de tendencia)
+    # Buscamos el promedio de gastos diario proyectado
+    days_passed = now.day if now.day > 0 else 1
+    daily_avg = gastos_hoy / days_passed
+    projection = daily_avg * 30 # Proyección a fin de mes
+    
+    context = (
+        f"--- REPORTE DE COACH FINANCIERO ---\n"
+        f"Mes Actual: {now.strftime('%B %Y')}\n"
+        f"Balance Real: +${ingresos_hoy:,.0f} (Ingresos) / -${gastos_hoy:,.0f} (Gastos)\n"
+        f"Saldo Disponible: ${(ingresos_hoy - gastos_hoy):,.0f}\n"
+        f"Proyección a Fin de Mes: Si sigues así, gastarás aproximadamente ${projection:,.0f} este mes.\n"
+        f"Top Gastos por Categoría: {categorias}\n"
+        f"Historial Reciente (Últimas 5): {[f'{t.date.strftime('%d/%m')}: {t.description} (${t.amount})' for t in all_recent_tx[:5]]}\n"
+        f"------------------------------------"
+    )
+    return context
 
 async def _process_ai_decision(update: Update, prompt_text: str, file_uri=None, media_parts=None):
     """ Función auxiliar para llamar a Gemini y guardar en Base de Datos """
     msg_status = await update.message.reply_text("🧠 Analizando con IA...")
     
     async with AsyncSessionLocal() as session:
-        summary_text = await get_monthly_summary(session)
+        summary_text = await get_enhanced_financial_context(session)
 
     system_instruction = (
-        f"Eres un asesor financiero personal con IA. Primero revisa el contexto actual del usuario:\n{summary_text}\n"
-        "Tu tarea final es responder SOLO con un JSON válido para ejecutar una acción en la App.\n"
-        "Campos JSON:\n"
-        "- action: 'create' (registro normal), 'create_fixed' (gasto recurrente que se cobra cada mes), 'update_latest' (corregir), 'delete_latest' (borrar), o 'answer' (si hace preguntas financieras).\n"
-        "- amount: (número float, si aplica)\n"
-        "- type: ('gasto' o 'ingreso', si aplica)\n"
-        "- category: (ej: 'Comida', 'Hogar', 'Salario', etc)\n"
-        "- description: (resumen corto de 1-2 palabras)\n"
-        "- message: (Si la action es 'answer', coloca aquí una respuesta útil, motivadora y conversacional hablándole sobre sus finanzas, basado estrictamente en el ESTADO FINANCIERO proveído. No uses markdown de json ni lo incluyas fuera del payload).\n\n"
-        "Reglas:\n"
-        "1. Si te dicen 'agrega X como gasto fijo' -> action: create_fixed\n"
-        "2. Si hacen una pregunta (ej: 'cuánto he gastado', 'me sobra plata') -> action: answer, y responde naturalmente en 'message'.\n"
-        "3. Acciones de borrar ('me equivoqué borra eso') -> action: delete_latest\n"
-        "No mandes texto fuera del bloque de JSON."
+        "Eres 'Aura', el Coach Financiero Personal más avanzado del mundo. Hablas español de forma clara, motivadora y experta.\n\n"
+        f"CONTEXTO FINANCIERO REAL DEL USUARIO:\n{summary_text}\n\n"
+        "TU TAREA:\n"
+        "Responde SIEMPRE con un objeto JSON compacto que contenga:\n"
+        "1. 'action': 'create' (registro), 'create_fixed' (gasto recurrente), 'update_latest' (corregir), 'delete_latest' (borrar), o 'answer' (preguntas/consejos).\n"
+        "2. 'amount', 'type', 'category', 'description' (si vas a registrar algo).\n"
+        "3. 'message': SIEMPRE escribe aquí un mensaje humano. Si es un registro, confirma con un tip de ahorro o una palmadita en la espalda. "
+        "Si es una pregunta ('answer'), actúa como un mentor: analiza sus gastos, dile si va bien o mal comparado con sus ingresos, detecta peligros (micro-fugas) y dale 1 paso accionable para mejorar hoy.\n\n"
+        "REGLAS DE ORO:\n"
+        "- Sé conversacional pero basado en DATOS.\n"
+        "- Si el usuario gasta mucho en una categoría, llámale la atención con elegancia.\n"
+        "- Si detectas que su proyección mensual supera sus ingresos, ¡ADVIÉRTELE urgently!\n"
+        "- NO incluyas markdown de json en tu respuesta final, solo el objeto.\n"
     )
     
     try:
