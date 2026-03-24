@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +71,10 @@ async def startup():
          await conn.run_sync(Base.metadata.create_all)
     # Arranca el chequeador de meses
     asyncio.create_task(fixed_expenses_cron())
+    
+    # Inicia el bot de Telegram en un hilo separado para no bloquear la API
+    import threading
+    threading.Thread(target=run_bot, daemon=True).start()
 
 @app.get("/api/balance")
 async def get_balance(db: AsyncSession = Depends(get_db)):
@@ -221,4 +226,5 @@ async def apply_fixed_expenses(db: AsyncSession = Depends(get_db)):
     return {"status": "success", "applied_count": count}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

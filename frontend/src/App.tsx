@@ -62,17 +62,18 @@ function App() {
 
   // Editing State
   const [editingTx, setEditingTx] = useState<Transaction | null>(null)
-  const [editingFe, setEditingFe] = useState<FixedExpense | null>(null)
+  const [editingFe, setEditingFe] = useState<FixedExpense | null>(null);
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   const fetchData = async () => {
     try {
-      const balRes = await fetch('http://localhost:8000/api/balance')
+      const balRes = await fetch(`${API_URL}/api/balance`)
       if (balRes.ok) setBalance(await balRes.json())
 
-      const transRes = await fetch('http://localhost:8000/api/transactions')
+      const transRes = await fetch(`${API_URL}/api/transactions`)
       if (transRes.ok) setTransactions(await transRes.json())
 
-      const feRes = await fetch('http://localhost:8000/api/fixed-expenses')
+      const feRes = await fetch(`${API_URL}/api/fixed-expenses`)
       if (feRes.ok) setFixedExpenses(await feRes.json())
     } catch (err) {
       console.error("Error fetching", err)
@@ -97,7 +98,7 @@ function App() {
         description: formItem,
         date: new Date(formDate).toISOString()
       }
-      const req = await fetch('http://localhost:8000/api/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const req = await fetch(`${API_URL}/api/transactions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (req.ok) {
         setFormStatus('✅ Registrado exitosamente'); setFormItem(''); setFormValue(''); fetchData()
         setTimeout(() => setFormStatus(''), 3000)
@@ -109,7 +110,7 @@ function App() {
     if(!confirm("¿Deseas aplicar todos los gastos fijos al mes actual? Esto descontará el dinero de tu saldo restante.")) return;
     setFeStatus('Aplicando gastos...')
     try {
-      const req = await fetch('http://localhost:8000/api/fixed-expenses/apply', { method: 'POST' })
+      const req = await fetch(`${API_URL}/api/fixed-expenses/apply`, { method: 'POST' })
       if (req.ok) {
         const json = await req.json()
         setFeStatus(`✅ ${json.applied_count} gastos aplicados correctamente al balance`)
@@ -123,7 +124,7 @@ function App() {
     e.preventDefault()
     setFeStatus('Guardando...');
     try {
-       const req = await fetch('http://localhost:8000/api/fixed-expenses', {
+       const req = await fetch(`${API_URL}/api/fixed-expenses`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ amount: parseFloat(feValue), category: feCategory, description: feItem })
        });
@@ -137,7 +138,7 @@ function App() {
   const handleDeleteTx = async (id: number) => {
     if(!confirm('¿Eliminar esta transacción de forma permanente?')) return;
     try {
-      await fetch(`http://localhost:8000/api/transactions/${id}`, { method: 'DELETE' });
+      await fetch(`${API_URL}/api/transactions/${id}`, { method: 'DELETE' });
       fetchData();
     } catch(err) { console.error(err) }
   }
@@ -145,7 +146,7 @@ function App() {
   const handleMakeFixed = async (t: Transaction) => {
     if(!confirm(`¿Quieres convertir "${t.description}" en un Gasto Fijo recurrente de ${formatCurrency(t.amount)}?`)) return;
     try {
-      const req = await fetch('http://localhost:8000/api/fixed-expenses', {
+      const req = await fetch(`${API_URL}/api/fixed-expenses`, {
          method: 'POST', headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify({ amount: t.amount, category: t.category, description: t.description })
       });
@@ -156,7 +157,7 @@ function App() {
   const handleSaveEdit = async () => {
     if(!editingTx) return;
     try {
-       await fetch(`http://localhost:8000/api/transactions/${editingTx.id}`, {
+       await fetch(`${API_URL}/api/transactions/${editingTx.id}`, {
          method: 'PUT', headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify({
             amount: editingTx.amount, type: editingTx.type, 
@@ -171,7 +172,7 @@ function App() {
   const handleDeleteFe = async (id: number) => {
     if(!confirm('¿Eliminar este Gasto Fijo de la plantilla permanentemente?')) return;
     try {
-      await fetch(`http://localhost:8000/api/fixed-expenses/${id}`, { method: 'DELETE' });
+      await fetch(`${API_URL}/api/fixed-expenses/${id}`, { method: 'DELETE' });
       fetchData();
     } catch(err) { console.error(err) }
   }
@@ -179,7 +180,7 @@ function App() {
   const handleSaveEditFe = async () => {
     if(!editingFe) return;
     try {
-       await fetch(`http://localhost:8000/api/fixed-expenses/${editingFe.id}`, {
+       await fetch(`${API_URL}/api/fixed-expenses/${editingFe.id}`, {
          method: 'PUT', headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify({ amount: editingFe.amount, category: editingFe.category, description: editingFe.description })
        });
