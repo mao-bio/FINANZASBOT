@@ -14,7 +14,7 @@ ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # Usamos el modelo moderno y rápido de Gemini que soporta texto, audio y visión
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 async def verify_user(update: Update) -> bool:
     if str(update.message.from_user.id) != ADMIN_TELEGRAM_ID:

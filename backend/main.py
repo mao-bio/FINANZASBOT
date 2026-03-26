@@ -15,9 +15,16 @@ from bot import run_bot
 
 app = FastAPI(title="Finanzas Personales API")
 
+origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://finanzasbot.vercel.app",
+    "https://finanzasbot-mao-bio.vercel.app"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
