@@ -4,7 +4,7 @@ sqlalchemy
 aiosqlite
 asyncpg
 python-dotenv
-google-generativeai
+anthropic
 python-telegram-bot
 pydantic
 psycopg2-binary

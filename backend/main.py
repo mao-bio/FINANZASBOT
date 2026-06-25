@@ -87,6 +87,10 @@ async def startup():
     import threading
     threading.Thread(target=run_bot, daemon=True).start()
 
+@app.get("/")
+async def root():
+    return {"message": "FinanzasBot API is running", "status": "online"}
+
 @app.get("/api/balance")
 async def get_balance(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Transaction))
