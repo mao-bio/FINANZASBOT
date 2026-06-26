@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // ─── Balance helper ────────────────────────────────────────────────────────────
 async function getBalance(): Promise<number> {
@@ -75,6 +75,7 @@ function detectTransaction(userMessage: string): DetectedTx | null {
     [/(?:me\s+dieron|me\s+pagaron|recib[ií]|gan[eé]|hoy\s+me\s+dieron|me\s+entr[oó]|me\s+cay[oó]|ingres[eé])\s+[\d]/, 'Otros ingresos', 'ingreso recibido'],
     [/(?:vend[ií]|cobr[eé]\s+negocio|me\s+pag[oó]\s+el\s+negocio|comisi[oó]n|freelance)/, 'Negocios', 'ingreso negocio'],
     [/(?:arrend[eé]|canon\s+de\s+arrendamiento|alquil[eé])/, 'Arriendo recibido', 'arriendo recibido'],
+    [/(?:tengo|dispongo\s+de|me\s+queda[n]?|cuento\s+con|ten[ií]a)\s+[\d]/, 'Saldo inicial', 'saldo inicial'],
   ];
 
   for (const [pattern, categoria, descripcion] of incomePatterns) {
@@ -217,8 +218,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Message or audio is required' }, { status: 400 });
     }
 
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return NextResponse.json({ error: 'ANTHROPIC_API_KEY is not configured.' }, { status: 500 });
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ error: 'GEMINI_API_KEY is not configured.' }, { status: 500 });
     }
 
     // 1. Detect transaction server-side (reliable, no LLM needed for this)
@@ -288,22 +289,19 @@ INSTRUCCIONES:
 - NO menciones que eres IA ni que 'no puedes' hacer algo que sí está en el historial.
 `;
 
-    // 4. Call Claude for the friendly reply
-    const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    // 4. Call Gemini for the friendly reply
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
     let responseText = '';
 
     if (audioBase64) {
-      responseText = '🎙️ El procesamiento de audio no está disponible. Por favor escribe tu mensaje.\nEjemplo: "Gasolina 50 mil hoy" o "Me pagaron 1.5M"';
+      const audioPart = { inlineData: { data: audioBase64, mimeType: audioMimeType || 'audio/webm' } };
+      const result = await model.generateContent([systemInstruction, audioPart]);
+      responseText = result.response.text();
     } else {
-      const stream = anthropicClient.messages.stream({
-        model: 'claude-opus-4-8',
-        max_tokens: 1024,
-        system: systemInstruction,
-        messages: [{ role: 'user', content: message }],
-      });
-      const msg = await stream.finalMessage();
-      responseText = msg.content[0].type === 'text' ? msg.content[0].text : '';
+      const result = await model.generateContent([systemInstruction, message]);
+      responseText = result.response.text();
     }
 
     // 5. Save transaction to Supabase if detected

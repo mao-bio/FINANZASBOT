@@ -1,85 +1,77 @@
-# 💸 FINANZASBOT — AI-Driven Personal Finance Coach
+# 💸 FinanzasBot — Coach Financiero con IA
 
-[![GitHub License](https://img.shields.io/github/license/mao-bio/FINANZASBOT?style=flat-square&color=38bdf8)](https://github.com/mao-bio/FINANZASBOT/blob/main/LICENSE)
-[![FastAPI](https://img.shields.io/badge/API-FastAPI-10b981?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61dafb?style=flat-square&logo=react)](https://react.dev/)
-[![Gemini AI](https://img.shields.io/badge/IA-Gemini%20Flash%202.5-818cf8?style=flat-square&logo=google-gemini)](https://deepmind.google/technologies/gemini/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-000000?style=flat-square&logo=next.js)](https://nextjs.org/)
+[![Gemini AI](https://img.shields.io/badge/IA-Gemini%202.5%20Flash-818cf8?style=flat-square&logo=google-gemini)](https://deepmind.google/technologies/gemini/)
+[![Supabase](https://img.shields.io/badge/DB-Supabase-3ecf8e?style=flat-square&logo=supabase)](https://supabase.com/)
+[![Vercel](https://img.shields.io/badge/Deploy-Vercel-000000?style=flat-square&logo=vercel)](https://vercel.com/)
 
-**FINANZASBOT** no es solo un rastreador de gastos; es un **Coach Financiero Personal** que vive en tu Telegram. Combinando el poder de **LLM (Gemini AI)**, una base de datos distribuida en **Supabase** y un dashboard visual de ultra-lujo, este proyecto resuelve el dolor de cabeza de registrar cada centavo manualmente.
+**FinanzasBot** es un **Coach Financiero Personal** que vive en la web y se usa desde cualquier lugar con el celular. Le cuentas tus movimientos en lenguaje natural (*"gasté 80 mil en mercado"* o *"tengo 3 millones"*) y la IA **Aura** los registra, categoriza y te da consejos sobre tu plata, en español colombiano informal.
 
----
-
-## 🚀 Características Principales
-
-### 🧠 Inteligencia Artificial Multipodal
-- **Voz a Datos**: Graba un audio diciendo *"Compré una pizza por $15.000 y pagué la luz"* y la IA extraerá montos, categorías y descripciones automáticamente.
-- **Visión de Facturas**: Envía una foto de tu ticket del súper y la IA leerá los ítems y los cargará por ti.
-- **Coach Aura**: Una IA que analiza tus últimos 90 días, detecta tendencias de gasto y te advierte si tu proyección mensual supera tus ingresos.
-
-### 📊 Dashboard Premium (Aurora Design)
-- **Glassmorphism UI**: Interfaz moderna basada en transparencia y desenfoque (Vite + React).
-- **Responsividad Total**: Optimizado para móviles con tablas interactivas y gráficos de Recharts.
-- **Dark Mode Nativo**: Colores curados (`#0f172a`) diseñados para reducir la fatiga visual.
-
-### 🛡️ Arquitectura Robusta
-- **Backend**: FastAPI con SQL Alchemy (Async) diseñado para alta concurrencia.
-- **Base de Datos**: PostgreSQL alojado en Supabase (Cloud).
-- **Integración**: Bot de Telegram con polling asíncrono y threading dedicado.
+App de uso personal: muestra balance, ingresos, gastos y un histórico, con un dashboard visual y diseño optimizado para móvil.
 
 ---
 
-## 🏗️ Stack Tecnológico
+## 🚀 Características
 
-| Capa | Tecnologías |
+- **Chat con Aura**: escribe tus gastos/ingresos en lenguaje colombiano informal y la IA los detecta y registra solo.
+- **Dashboard visual**: saldo, ingresos, gastos, flujo de caja y distribución por categorías (Recharts).
+- **Historial completo**: búsqueda y filtros por tipo y categoría.
+- **Responsive / móvil**: barra de navegación inferior estilo app nativa, optimizado para iPhone/Android.
+- **Login propio**: autenticación server-side con credenciales en variables de entorno.
+
+---
+
+## 🏗️ Stack
+
+| Capa | Tecnología |
 | :--- | :--- |
-| **Frontend** | React, Vite, TypeScript, Recharts, Vanilla CSS (Glassmorphism) |
-| **Backend** | Python, FastAPI, SQLAlchemy (Async), Uvicorn |
-| **IA** | Google Gemini 2.5 Flash API (Texto, Audio, Visión) |
-| **Database** | PostgreSQL (Supabase Cloud), SQLite (Local Dev) |
-| **Deploy** | Render (API/Bot), Vercel (Web), GitHub (VCS) |
+| **Framework** | Next.js 14 (App Router) + TypeScript |
+| **IA** | Google Gemini 2.5 Flash (`@google/generative-ai`) |
+| **Base de datos** | Supabase (PostgreSQL en la nube) |
+| **UI** | CSS custom (Glassmorphism / Aurora Dark), Recharts, lucide-react |
+| **Deploy** | Vercel |
 
 ---
 
-## 🛠️ Instalación y Configuración
+## 🛠️ Correr en local
 
-### Prerrequisitos
-- Python 3.10+
-- Node.js 18+
-- Tokens de: [Telegram Bot](https://t.me/BotFather), [Gemini API](https://aistudio.google.com/), [Supabase](https://supabase.com/).
-
-### Instalación Backend
 ```bash
-cd backend
-python -m venv venv
-source venv/Scripts/activate  # En Windows: .\venv\Scripts\activate
-pip install -r requirements.txt
-# Crea un archivo .env con tus tokens
-python main.py
+pnpm install
+cp .env.local.example .env.local   # rellena tus claves
+pnpm dev                            # http://localhost:3000
 ```
 
-### Instalación Frontend
-```bash
-cd frontend
-npm install
-npm run dev
+### Variables de entorno
+
+```env
+GEMINI_API_KEY=...              # aistudio.google.com/app/apikey (gratis)
+APP_USERNAME=mario
+APP_PASSWORD=...                # tu contraseña de login
+NEXT_PUBLIC_SUPABASE_URL=...
+SUPABASE_SERVICE_KEY=...        # solo lado servidor, nunca en el cliente
 ```
+
+> En producción, estas variables se configuran en **Vercel → Settings → Environment Variables**.
 
 ---
 
-## 🛣️ Roadmap de Futuro
-- [ ] Exportación de reportes mensuales en PDF/Excel.
-- [ ] Implementación de "Retos de Ahorro" gamificados.
-- [ ] Multi-usuario con sistema de autenticación seguro.
+## ☁️ Deploy a Vercel
+
+```bash
+vercel --prod
+```
+
+El proyecto está enlazado a Vercel (`finanzas`). Cada push a `main` también puede disparar deploy automático si está conectado el repo de GitHub.
 
 ---
 
 ## 👨‍💻 Autor
-**Mario (Mao-Bio)**  
-*"Apasionado por crear soluciones donde la IA se encuentra con el mundo real."*
 
-- **GitHub:** [Mao-Bio](https://github.com/mao-bio)
-- **LinkedIn:** [Tu Nombre / LinkedIn]
+**Mario Hernández** — *"Apasionado por crear soluciones donde la IA se encuentra con el mundo real."*
+
+- 💼 LinkedIn: [Mario Hernández](https://www.linkedin.com/in/mario-hernández-/)
+- 🐙 GitHub: [@mao-bio](https://github.com/mao-bio)
 
 ---
 
-> *Este proyecto fue construido usando metodologías de desarrollo ágil y diseño UI/UX centrado en el usuario.*
+<sub>Hecho con Next.js, Gemini y Supabase · Análisis de finanzas personales, no asesoría financiera.</sub>

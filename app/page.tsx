@@ -269,12 +269,21 @@ export default function Home() {
         setMessages((prev) => [...prev, systemMsg]);
       }
     } catch (err: any) {
+      let errorText = err.message || 'No se pudo conectar con el servidor.';
+      // Extract readable message from JSON error strings
+      try {
+        const match = errorText.match(/\{[\s\S]*\}/);
+        if (match) {
+          const parsed = JSON.parse(match[0]);
+          errorText = parsed?.error?.message || parsed?.message || errorText;
+        }
+      } catch { /* keep original */ }
       setMessages((prev) => [
         ...prev,
         {
           id: Math.random().toString(),
           sender: 'system',
-          text: `❌ Error: ${err.message || 'No se pudo conectar con el servidor.'}`,
+          text: `❌ ${errorText}`,
         },
       ]);
     } finally {
@@ -572,13 +581,18 @@ export default function Home() {
             <div className="web-chat-main">
               <div className="web-chat-messages">
                 {messages.map((msg) => (
-                  <div key={msg.id} className={`chat-bubble ${msg.sender}${msg.sender === 'system' ? (msg.text.startsWith('❌') ? ' error' : ' success') : ''}`}>
-                    {msg.text}
-                    {msg.audioUrl && (
-                      <div style={{ marginTop: '8px' }}>
-                        <audio src={msg.audioUrl} controls style={{ width: '100%', maxHeight: '36px' }} />
-                      </div>
+                  <div key={msg.id} className={`chat-bubble-wrapper ${msg.sender}`}>
+                    {msg.sender === 'bot' && (
+                      <div className="bot-avatar" aria-hidden="true">A</div>
                     )}
+                    <div className={`chat-bubble ${msg.sender}${msg.sender === 'system' ? (msg.text.startsWith('❌') ? ' error' : ' success') : ''}`}>
+                      {msg.text}
+                      {msg.audioUrl && (
+                        <div style={{ marginTop: '8px' }}>
+                          <audio src={msg.audioUrl} controls style={{ width: '100%', maxHeight: '36px' }} />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
                 
@@ -659,6 +673,10 @@ export default function Home() {
             {/* Aside contextual information / suggestions */}
             <aside className="web-chat-aside">
               <div className="premium-panel" style={{ height: '100%' }}>
+                <div className="aside-balance-chip">
+                  <span className="aside-balance-label">Saldo actual</span>
+                  <span className="aside-balance-value">{formatCurrency(currentBalance)}</span>
+                </div>
                 <div className="panel-header" style={{ marginBottom: '14px' }}>
                   <h2>Acciones Rápidas</h2>
                 </div>
