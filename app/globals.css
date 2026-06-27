@@ -234,7 +234,25 @@ header {
   font-size: 1rem;
   line-height: 1.4;
   word-wrap: break-word;
-  animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Entrada direccional con curva spring (motion-meaning + navigation-direction) */
+.chat-bubble-wrapper {
+  animation: bubbleIn 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.chat-bubble-wrapper.user {
+  animation-name: bubbleInRight;
+}
+
+@keyframes bubbleIn {
+  0% { transform: translate3d(-14px, 6px, 0) scale(0.96); opacity: 0; }
+  100% { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
+}
+
+@keyframes bubbleInRight {
+  0% { transform: translate3d(14px, 6px, 0) scale(0.96); opacity: 0; }
+  100% { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
 }
 
 @keyframes popIn {
@@ -243,11 +261,20 @@ header {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-bubble { animation: none; }
-  .typing-dot { animation: none; opacity: 0.5; }
-  .glow { animation: none; }
-  .login-card { animation: none; }
-  .login-error { animation: none; }
+  .chat-bubble,
+  .chat-bubble-wrapper,
+  .transaction-item,
+  .web-chat-aside .quick-action-btn,
+  .typing-dot,
+  .glow,
+  .login-card,
+  .login-error,
+  .chart-skeleton {
+    animation: none !important;
+  }
+  .typing-dot { opacity: 0.5; }
+  .summary-card:hover,
+  .transaction-item:hover { transform: none; }
 }
 
 .chat-bubble.user {
@@ -1252,6 +1279,68 @@ header {
 
 .filter-select:focus {
   border-color: var(--accent-green);
+}
+
+/* ==========================================
+   ✨ ANIMACIONES (ui-ux-pro-max §7)
+   ========================================== */
+
+/* Stagger de entrada para listas (stagger-sequence: 40ms/ítem) */
+.transaction-item {
+  animation: listItemIn 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.transaction-item:nth-child(1) { animation-delay: 0ms; }
+.transaction-item:nth-child(2) { animation-delay: 40ms; }
+.transaction-item:nth-child(3) { animation-delay: 80ms; }
+.transaction-item:nth-child(4) { animation-delay: 120ms; }
+.transaction-item:nth-child(5) { animation-delay: 160ms; }
+.transaction-item:nth-child(6) { animation-delay: 200ms; }
+.transaction-item:nth-child(n+7) { animation-delay: 240ms; }
+
+.web-chat-aside .quick-action-btn {
+  animation: listItemIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.web-chat-aside .quick-action-btn:nth-child(1) { animation-delay: 30ms; }
+.web-chat-aside .quick-action-btn:nth-child(2) { animation-delay: 70ms; }
+.web-chat-aside .quick-action-btn:nth-child(3) { animation-delay: 110ms; }
+.web-chat-aside .quick-action-btn:nth-child(4) { animation-delay: 150ms; }
+.web-chat-aside .quick-action-btn:nth-child(5) { animation-delay: 190ms; }
+
+@keyframes listItemIn {
+  0% { transform: translate3d(0, 10px, 0); opacity: 0; }
+  100% { transform: translate3d(0, 0, 0); opacity: 1; }
+}
+
+/* Skeleton shimmer para carga de gráficos (loading-states) */
+.chart-skeleton {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-md);
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.03) 30%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.03) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Flash de confirmación al actualizar saldo (success-feedback) */
+.aside-balance-chip {
+  transition: box-shadow 0.4s ease, border-color 0.4s ease;
+}
+
+/* Feedback de presión uniforme (scale-feedback) */
+.nav-tab-btn:active,
+.bottom-tab-btn:active,
+.filter-select:active {
+  transform: scale(0.97);
 }
 
 /* ==========================================

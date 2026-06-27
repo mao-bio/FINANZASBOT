@@ -48,6 +48,53 @@ interface Message {
   audioUrl?: string; // Optional URL for locally recorded message preview
 }
 
+// Formateador de pesos colombianos (nivel módulo, reutilizable)
+const fmtCOP = (val: number) =>
+  new Intl.NumberFormat('es-CO', {
+    style: 'currency',
+    currency: 'COP',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(val);
+
+// Número animado con count-up (easeOutCubic). Respeta prefers-reduced-motion.
+function AnimatedCurrency({ value, className }: { value: number; className?: string }) {
+  const [display, setDisplay] = useState(value);
+  const prevRef = useRef(value);
+
+  useEffect(() => {
+    const from = prevRef.current;
+    const to = value;
+    if (from === to) {
+      setDisplay(to);
+      return;
+    }
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReduced) {
+      setDisplay(to);
+      prevRef.current = to;
+      return;
+    }
+    const duration = 650;
+    let startTime: number | null = null;
+    let raf = 0;
+    const tick = (t: number) => {
+      if (startTime === null) startTime = t;
+      const p = Math.min((t - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic
+      setDisplay(Math.round(from + (to - from) * eased));
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else prevRef.current = to;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+
+  return <span className={className}>{fmtCOP(display)}</span>;
+}
+
 export default function Home() {
   const [username, setUsername] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'chat' | 'dashboard' | 'history'>('chat');
@@ -675,7 +722,7 @@ export default function Home() {
               <div className="premium-panel" style={{ height: '100%' }}>
                 <div className="aside-balance-chip">
                   <span className="aside-balance-label">Saldo actual</span>
-                  <span className="aside-balance-value">{formatCurrency(currentBalance)}</span>
+                  <AnimatedCurrency value={currentBalance} className="aside-balance-value" />
                 </div>
                 <div className="panel-header" style={{ marginBottom: '14px' }}>
                   <h2>Acciones Rápidas</h2>
@@ -745,7 +792,7 @@ export default function Home() {
               <div className="summary-card balance">
                 <div>
                   <div className="card-label">Saldo Disponible</div>
-                  <div className="card-value">{formatCurrency(currentBalance)}</div>
+                  <AnimatedCurrency value={currentBalance} className="card-value" />
                 </div>
                 <Wallet size={32} color="var(--accent-blue)" />
               </div>
@@ -753,7 +800,7 @@ export default function Home() {
               <div className="summary-card income">
                 <div>
                   <div className="card-label">Total Ingresos</div>
-                  <div className="card-value">{formatCurrency(totalIncome)}</div>
+                  <AnimatedCurrency value={totalIncome} className="card-value" />
                 </div>
                 <TrendingUp size={32} color="var(--accent-green)" />
               </div>
@@ -761,7 +808,7 @@ export default function Home() {
               <div className="summary-card expense">
                 <div>
                   <div className="card-label">Total Gastos</div>
-                  <div className="card-value">{formatCurrency(totalExpenses)}</div>
+                  <AnimatedCurrency value={totalExpenses} className="card-value" />
                 </div>
                 <TrendingDown size={32} color="var(--accent-red)" />
               </div>
@@ -791,7 +838,7 @@ export default function Home() {
                       </BarChart>
                     </ResponsiveContainer>
                   ) : (
-                    <div>Cargando gráfico...</div>
+                    <div className="chart-skeleton" aria-label="Cargando gráfico" />
                   )}
                 </div>
               </div>
@@ -835,7 +882,7 @@ export default function Home() {
                       <div className="empty-state">No hay gastos para clasificar.</div>
                     )
                   ) : (
-                    <div>Cargando gráfico...</div>
+                    <div className="chart-skeleton" aria-label="Cargando gráfico" />
                   )}
                 </div>
               </div>
