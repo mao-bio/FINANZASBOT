@@ -1,14 +1,6 @@
 import { Banknote, CreditCard, Landmark, PiggyBank, Smartphone, type LucideIcon } from 'lucide-react';
-import type { Cuenta, Movimiento, TipoCuenta } from '../../shared/types';
+import type { Movimiento, TipoCuenta } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
-
-export const KIND_LABELS: Record<TipoCuenta, string> = {
-  efectivo: 'Efectivo',
-  banco: 'Cuenta de banco',
-  billetera: 'Billetera digital (Nequi, Daviplata…)',
-  credito: 'Tarjeta de crédito',
-  ahorro: 'Ahorros',
-};
 
 export const KIND_SHORT: Record<TipoCuenta, string> = {
   efectivo: 'Efectivo',
@@ -26,23 +18,52 @@ export const KIND_ICONS: Record<TipoCuenta, LucideIcon> = {
   ahorro: PiggyBank,
 };
 
-/** Saldo en palabras sencillas: en tarjetas de crédito se muestra la deuda. */
-export function balanceText(c: Pick<Cuenta, 'tipo' | 'saldo'>): string {
-  if (c.tipo === 'credito') return c.saldo < 0 ? `Debes ${fmtCOP(-c.saldo)}` : fmtCOP(c.saldo);
-  return fmtCOP(c.saldo);
+export function amountText(m: Pick<Movimiento, 'tipo' | 'monto'>): string {
+  if (m.tipo === 'ingreso') return `+${fmtCOP(m.monto)}`;
+  if (m.tipo === 'gasto') return `-${fmtCOP(m.monto)}`;
+  if (m.tipo === 'ajuste') return `${m.monto >= 0 ? '+' : '-'}${fmtCOP(Math.abs(m.monto))}`;
+  return fmtCOP(m.monto);
 }
 
-export function txSummary(m: Movimiento): string {
-  switch (m.tipo) {
-    case 'gasto':
-      return `Gasto de ${fmtCOP(m.monto)} · ${m.categoria} · ${m.cuenta}`;
-    case 'ingreso':
-      return `Ingreso de ${fmtCOP(m.monto)} · ${m.categoria} · ${m.cuenta}`;
-    case 'transferencia':
-      return `Pasaste ${fmtCOP(m.monto)} de ${m.cuenta} a ${m.cuenta_destino}`;
-    case 'ajuste':
-      return `${m.cuenta}: ${m.descripcion.toLowerCase()}`;
-  }
+/** "Comida - Mercado" → "Mercado" */
+export function shortCategory(category: string): string {
+  return category.split(' - ').pop() ?? category;
+}
+
+const BOGOTA = 'America/Bogota';
+
+/** 'YYYY-MM-DD' del día en Colombia */
+export function dayKey(iso: string | Date): string {
+  return new Date(iso).toLocaleDateString('en-CA', { timeZone: BOGOTA });
+}
+
+export function dayLabel(key: string): string {
+  const today = dayKey(new Date());
+  const yesterday = dayKey(new Date(Date.now() - 86_400_000));
+  if (key === today) return 'Hoy';
+  if (key === yesterday) return 'Ayer';
+  const label = new Date(`${key}T12:00:00-05:00`).toLocaleDateString('es-CO', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    timeZone: BOGOTA,
+  });
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+export function timeLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', timeZone: BOGOTA });
+}
+
+export function shortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: BOGOTA });
+}
+
+export function greeting(): string {
+  const hour = Number(new Date().toLocaleTimeString('en-US', { hour: 'numeric', hour12: false, timeZone: BOGOTA }));
+  if (hour >= 5 && hour < 12) return 'Buenos días,';
+  if (hour >= 12 && hour < 19) return 'Buenas tardes,';
+  return 'Buenas noches,';
 }
 
 export function formatDate(iso: string): string {

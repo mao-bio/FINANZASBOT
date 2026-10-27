@@ -1,12 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { CircleAlert, Eye, EyeOff, Sparkles } from 'lucide-react';
 import { api } from '../lib/api';
 
-interface LoginPageProps {
-  onLoginSuccess: (user: string) => void;
-}
-
-export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
+export default function LoginPage({ onLoginSuccess }: { onLoginSuccess: (user: string) => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -28,73 +24,65 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
   };
 
   return (
-    <div className="login-wrapper">
-      <div className="login-bg-glows">
-        <div className="glow glow-1"></div>
-        <div className="glow glow-2"></div>
+    <main className="login">
+      <div className="login-brand">
+        <span className="aura-orb xl" aria-hidden="true">
+          <Sparkles size={40} />
+        </span>
+        <h1>FinanzasBot</h1>
+        <p>Tu plata, clarita. Cuéntale a Aura tus gastos y ella lleva las cuentas.</p>
       </div>
 
-      <div className="login-card">
-        <div className="login-header">
-          <span className="login-logo" role="img" aria-label="FinanzasBot">💸</span>
-          <h2>FinanzasBot</h2>
-          <p>TU PLATA, CLARITA</p>
+      <form onSubmit={handleSubmit} className="card form" noValidate>
+        <div className="field">
+          <label htmlFor="username">Usuario</label>
+          <input
+            id="username"
+            className="input"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Tu nombre"
+            required
+            autoComplete="username"
+            autoCapitalize="none"
+            disabled={loading}
+          />
         </div>
-
-        <form onSubmit={handleSubmit} className="login-form" noValidate>
-          <div className="form-group">
-            <label htmlFor="username">Usuario</label>
+        <div className="field">
+          <label htmlFor="password">Contraseña</label>
+          <div className="password-wrap">
             <input
-              type="text"
-              id="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Ingresa tu nombre..."
+              id="password"
+              className="input"
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Tu clave"
               required
-              autoComplete="username"
+              autoComplete="current-password"
               disabled={loading}
             />
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+            >
+              {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+            </button>
           </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Contraseña</label>
-            <div className="password-field-wrapper">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                id="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Ingresa tu clave..."
-                required
-                autoComplete="current-password"
-                disabled={loading}
-              />
-              <button
-                type="button"
-                className="password-toggle-btn"
-                onClick={() => setShowPassword((v) => !v)}
-                aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          {error && (
-            <p className="login-error" role="alert" aria-live="assertive">
-              {error}
-            </p>
-          )}
-
-          <button type="submit" className="login-submit-btn" disabled={loading}>
-            {loading ? <span className="spinner" aria-label="Cargando..." /> : 'Ingresar al Centro Financiero'}
-          </button>
-        </form>
-
-        <div className="login-footer">
-          <p>Hecho con amor y IA para Mario 💙</p>
         </div>
-      </div>
-    </div>
+
+        {error && (
+          <p className="form-error login-error" role="alert">
+            <CircleAlert size={18} aria-hidden="true" /> {error}
+          </p>
+        )}
+
+        <button type="submit" className="btn btn-primary btn-block" disabled={loading}>
+          {loading ? <span className="spinner" aria-label="Entrando…" /> : 'Entrar'}
+        </button>
+      </form>
+    </main>
   );
 }

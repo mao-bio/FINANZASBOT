@@ -1,102 +1,86 @@
 import { useState, type FormEvent } from 'react';
-import { ChevronRight, Plus, Star, TrendingDown, Wallet, Scale } from 'lucide-react';
+import { ChevronRight, MessageCircle, Plus, Star, Trash2 } from 'lucide-react';
 import type { Cuenta, Resumen, TipoCuenta } from '../../shared/types';
+import { fmtCOP } from '../../shared/format';
 import { api } from '../lib/api';
-import { KIND_ICONS, KIND_LABELS, KIND_SHORT, balanceText, formatMoneyInput, parseMoney } from '../lib/labels';
+import { KIND_ICONS, KIND_SHORT, formatMoneyInput, parseMoney } from '../lib/labels';
+import { IconTile, KIND_COLORS } from '../lib/visuals';
 import AnimatedCurrency from './AnimatedCurrency';
 import { ConfirmDialog, MoneyInput, Sheet } from './Dialogs';
 
 type Run = <T>(fn: () => Promise<T>) => Promise<T | undefined>;
 
-export default function CuentasView(props: { summary: Resumen; onSummary: (s: Resumen) => void; run: Run }) {
-  const { summary, onSummary, run } = props;
-  const [editing, setEditing] = useState<Cuenta | 'new' | null>(null);
+export default function CuentasView(props: { summary: Resumen; onEdit: (c: Cuenta | 'new') => void }) {
+  const { summary, onEdit } = props;
+  const { totales } = summary;
 
   return (
-    <div className="view-stack">
-      <div className="dashboard-grid">
-        <div className="summary-card balance">
-          <div>
-            <div className="card-label">Tienes disponible</div>
-            <AnimatedCurrency value={summary.totales.tienes} className="card-value" />
-            <div className="card-hint">Efectivo, bancos, billeteras y ahorros</div>
-          </div>
-          <Wallet size={32} color="var(--accent-blue)" aria-hidden="true" />
-        </div>
-        <div className="summary-card expense">
-          <div>
-            <div className="card-label">Debes en tarjetas</div>
-            <AnimatedCurrency value={summary.totales.debes} className="card-value" />
-            <div className="card-hint">Lo que falta por pagar de tus tarjetas de crédito</div>
-          </div>
-          <TrendingDown size={32} color="var(--accent-red)" aria-hidden="true" />
-        </div>
-        <div className="summary-card income">
-          <div>
-            <div className="card-label">Tu plata real</div>
-            <AnimatedCurrency value={summary.totales.neto} className="card-value" />
-            <div className="card-hint">Lo que tienes menos lo que debes</div>
-          </div>
-          <Scale size={32} color="var(--accent-green)" aria-hidden="true" />
-        </div>
-      </div>
+    <div className="screen">
+      <header className="screen-header">
+        <h1>Cuentas</h1>
+        <button className="btn btn-primary btn-sm" onClick={() => onEdit('new')}>
+          <Plus size={18} aria-hidden="true" /> Agregar
+        </button>
+      </header>
 
-      <div className="premium-panel">
-        <div className="panel-header">
+      <section className="networth-card" aria-label="Tu plata real">
+        <span className="label">Tu plata real</span>
+        <AnimatedCurrency value={totales.neto} className="big amount" />
+        <span className="note-text">Lo que tienes menos lo que debes</span>
+        <div className="networth-split">
+          <div>
+            <span>Tienes</span>
+            <strong className="amount">{fmtCOP(totales.tienes)}</strong>
+          </div>
+          <div>
+            <span>Debes en tarjetas</span>
+            <strong className="amount">{fmtCOP(totales.debes)}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-head">
           <h2>Mis cuentas</h2>
-          <button className="btn-primary small" onClick={() => setEditing('new')}>
-            <Plus size={16} /> Agregar
-          </button>
+          <span className="muted">{summary.cuentas.length}</span>
         </div>
-        <ul className="account-list">
-          {summary.cuentas.map((c) => {
-            const Icon = KIND_ICONS[c.tipo];
-            return (
-              <li key={c.id}>
-                <button className="account-item" onClick={() => setEditing(c)}>
-                  <span className={`account-icon kind-${c.tipo}`} aria-hidden="true">
-                    <Icon size={20} />
-                  </span>
-                  <span className="account-info">
-                    <span className="account-name">
-                      <span className="account-name-text">{c.nombre}</span>
-                      {c.principal && (
-                        <span className="badge">
-                          <Star size={11} /> Principal
-                        </span>
-                      )}
+        <div className="card flush">
+          {summary.cuentas.map((c) => (
+            <button key={c.id} className="acct-row" onClick={() => onEdit(c)}>
+              <IconTile visual={{ Icon: KIND_ICONS[c.tipo], color: KIND_COLORS[c.tipo] }} />
+              <span className="tx-main">
+                <span className="tx-title">
+                  <span>{c.nombre}</span>
+                  {c.principal && (
+                    <span className="badge">
+                      <Star size={10} fill="currentColor" aria-hidden="true" /> Principal
                     </span>
-                    <span className="account-kind">{KIND_SHORT[c.tipo]}</span>
-                  </span>
-                  <span className={`account-balance${c.saldo < 0 ? ' negative' : ''}`}>{balanceText(c)}</span>
-                  <ChevronRight size={18} className="account-chevron" aria-hidden="true" />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-        <p className="panel-tip">
-          💬 También puedes decirle a Aura: <em>"tengo 300 mil en Nequi"</em> o <em>"debo 1 millón en la Visa"</em>. La cuenta
-          <strong> principal</strong> es la que uso cuando no me dices con qué pagaste.
-        </p>
-      </div>
+                  )}
+                </span>
+                <span className="tx-sub">{KIND_SHORT[c.tipo]}</span>
+              </span>
+              <span className={`acct-balance${c.saldo < 0 ? ' negative' : ''}`}>
+                <span className="amount">{fmtCOP(Math.abs(c.saldo))}</span>
+                {c.saldo < 0 && <small>{c.tipo === 'credito' ? 'Debes' : 'En rojo'}</small>}
+              </span>
+              <ChevronRight size={18} className="chev" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+      </section>
 
-      {editing && (
-        <AccountSheet
-          cuenta={editing === 'new' ? null : editing}
-          onClose={() => setEditing(null)}
-          onSaved={(s) => {
-            onSummary(s);
-            setEditing(null);
-          }}
-          run={run}
-        />
-      )}
+      <p className="hint">
+        <MessageCircle size={18} aria-hidden="true" />
+        <span>
+          También puedes decirle a Aura <em>"tengo 300 mil en Nequi"</em> o <em>"debo 1 millón en la Visa"</em>. Uso tu cuenta
+          principal cuando no me dices con qué pagaste.
+        </span>
+      </p>
     </div>
   );
 }
 
-function AccountSheet(props: { cuenta: Cuenta | null; onClose: () => void; onSaved: (s: Resumen) => void; run: Run }) {
+export function AccountSheet(props: { cuenta: Cuenta | null; onClose: () => void; onSaved: (s: Resumen) => void; run: Run }) {
   const { cuenta, onClose, onSaved, run } = props;
   const [nombre, setNombre] = useState(cuenta?.nombre ?? '');
   const [tipo, setTipo] = useState<TipoCuenta>(cuenta?.tipo ?? 'banco');
@@ -104,7 +88,6 @@ function AccountSheet(props: { cuenta: Cuenta | null; onClose: () => void; onSav
   const [saldo, setSaldo] = useState(cuenta ? formatMoneyInput(String(initialSaldo)) : '');
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const esCredito = tipo === 'credito';
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -125,7 +108,9 @@ function AccountSheet(props: { cuenta: Cuenta | null; onClose: () => void; onSav
 
   async function makePrincipal() {
     if (!cuenta) return;
+    setSaving(true);
     const res = await run(() => api.updateAccount(cuenta.id, { principal: true }));
+    setSaving(false);
     if (res) onSaved(res.summary);
   }
 
@@ -139,37 +124,50 @@ function AccountSheet(props: { cuenta: Cuenta | null; onClose: () => void; onSav
   }
 
   return (
-    <Sheet title={cuenta ? `Editar ${cuenta.nombre}` : 'Nueva cuenta'} onClose={onClose}>
-      <form className="sheet-form" onSubmit={save}>
-        <label className="form-field">
-          <span>Nombre</span>
-          <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: Bancolombia, Nequi, Visa" maxLength={40} required autoFocus={!cuenta} />
-        </label>
-        <label className="form-field">
-          <span>¿Qué tipo de cuenta es?</span>
-          <select value={tipo} onChange={(e) => setTipo(e.target.value as TipoCuenta)}>
-            {(Object.keys(KIND_LABELS) as TipoCuenta[]).map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABELS[k]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="form-field">
-          <label htmlFor="saldo-cuenta">{esCredito ? '¿Cuánto debes hoy en esta tarjeta?' : '¿Cuánta plata tiene hoy?'}</label>
+    <Sheet title={cuenta ? cuenta.nombre : 'Nueva cuenta'} onClose={onClose}>
+      <form className="form" onSubmit={save}>
+        <div className="field">
+          <label htmlFor="nombre-cuenta">Nombre</label>
+          <input
+            id="nombre-cuenta"
+            className="input"
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            placeholder="Ej: Bancolombia, Nequi, Visa"
+            maxLength={40}
+            required
+            autoFocus={!cuenta}
+          />
+        </div>
+        <div className="field" role="group" aria-labelledby="tipo-cuenta">
+          <span id="tipo-cuenta">Tipo de cuenta</span>
+          <div className="kind-grid">
+            {(Object.keys(KIND_SHORT) as TipoCuenta[]).map((k) => {
+              const Icon = KIND_ICONS[k];
+              return (
+                <button key={k} type="button" className="kind-option" aria-pressed={tipo === k} onClick={() => setTipo(k)}>
+                  <Icon size={22} aria-hidden="true" />
+                  {KIND_SHORT[k]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="field">
+          <label htmlFor="saldo-cuenta">{tipo === 'credito' ? '¿Cuánto debes hoy en esta tarjeta?' : '¿Cuánta plata tiene hoy?'}</label>
           <MoneyInput id="saldo-cuenta" value={saldo} onChange={setSaldo} />
           {cuenta && <small>Si cambias este valor, registro un ajuste para que el saldo quede igual al real.</small>}
         </div>
-        <button type="submit" className="btn-primary" disabled={saving || !nombre.trim()}>
-          {saving ? 'Guardando…' : 'Guardar'}
+        <button type="submit" className="btn btn-primary btn-block" disabled={saving || !nombre.trim()}>
+          {saving ? <span className="spinner" aria-label="Guardando" /> : 'Guardar'}
         </button>
         {cuenta && !cuenta.principal && (
-          <div className="sheet-secondary-actions">
-            <button type="button" className="btn-ghost" onClick={makePrincipal} disabled={saving}>
-              <Star size={16} /> Usar como principal
+          <div className="sheet-actions">
+            <button type="button" className="btn btn-soft" onClick={makePrincipal} disabled={saving}>
+              <Star size={18} aria-hidden="true" /> Principal
             </button>
-            <button type="button" className="btn-ghost danger" onClick={() => setConfirmDelete(true)} disabled={saving}>
-              Quitar cuenta
+            <button type="button" className="btn btn-danger" onClick={() => setConfirmDelete(true)} disabled={saving}>
+              <Trash2 size={18} aria-hidden="true" /> Quitar
             </button>
           </div>
         )}
@@ -178,8 +176,9 @@ function AccountSheet(props: { cuenta: Cuenta | null; onClose: () => void; onSav
         <ConfirmDialog
           title={`¿Quitar ${cuenta.nombre}?`}
           message="Si ya tiene movimientos, la guardo en el historial pero deja de aparecer en tus cuentas. Debe estar en $0."
-          confirmLabel="Sí, quitar"
+          confirmLabel="Quitar"
           danger
+          icon={Trash2}
           busy={saving}
           onConfirm={remove}
           onCancel={() => setConfirmDelete(false)}

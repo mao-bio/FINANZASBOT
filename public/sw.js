@@ -1,6 +1,6 @@
 // Service worker de FinanzasBot: guarda la interfaz para que la app abra rápido
 // (incluso con mala señal). Los datos (/api/*) siempre van a la red.
-const CACHE = 'finanzasbot-v1';
+const CACHE = 'finanzasbot-v2';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon.svg'];
 
 self.addEventListener('install', (event) => {

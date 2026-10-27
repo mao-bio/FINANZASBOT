@@ -1,31 +1,58 @@
 import { useState, type FormEvent } from 'react';
-import { AlertTriangle, CheckCircle2, Plus, TrendingDown, TrendingUp, Wallet, XCircle } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, CircleCheck, CircleX, PiggyBank, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { Presupuesto, Resumen } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
 import { api } from '../lib/api';
 import { formatMoneyInput, monthName, parseMoney } from '../lib/labels';
-import AnimatedCurrency from './AnimatedCurrency';
+import { IconTile, groupVisual } from '../lib/visuals';
 import { ConfirmDialog, MoneyInput, Sheet } from './Dialogs';
 
 type Run = <T>(fn: () => Promise<T>) => Promise<T | undefined>;
 
-// Colores validados para daltonismo sobre la superficie oscura (dataviz).
-const COLOR_INGRESOS = '#199e70';
-const COLOR_GASTOS = '#d95926';
-const COLOR_CATEGORIA = '#3987e5';
-
 function compact(v: number): string {
-  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toLocaleString('es-CO', { maximumFractionDigits: 1 })} M`;
-  if (Math.abs(v) >= 1_000) return `${Math.round(v / 1_000)} mil`;
+  if (Math.abs(v) >= 100_000) return `${(v / 1_000_000).toLocaleString('es-CO', { maximumFractionDigits: 1 })} M`;
+  if (Math.abs(v) >= 1_000) return `${Math.round(v / 1_000)}k`;
   return String(v);
 }
 
+const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 function budgetStatus(p: Presupuesto) {
   const pct = p.monto > 0 ? p.gastado / p.monto : 0;
-  if (pct > 1) return { key: 'critical', label: `Te pasaste ${fmtCOP(p.gastado - p.monto)}`, Icon: XCircle, pct };
-  if (pct >= 0.8) return { key: 'warning', label: `Ojo: te quedan ${fmtCOP(p.monto - p.gastado)}`, Icon: AlertTriangle, pct };
-  return { key: 'good', label: `Vas bien: te quedan ${fmtCOP(p.monto - p.gastado)}`, Icon: CheckCircle2, pct };
+  if (pct > 1) return { key: 'critical', label: `Te pasaste ${fmtCOP(p.gastado - p.monto)}`, Icon: CircleX, pct };
+  if (pct >= 0.8) return { key: 'warning', label: `Ojo: te quedan ${fmtCOP(p.monto - p.gastado)}`, Icon: TriangleAlert, pct };
+  return { key: 'good', label: `Vas bien: te quedan ${fmtCOP(p.monto - p.gastado)}`, Icon: CircleCheck, pct };
+}
+
+/** Anillo de un solo valor: qué parte de lo que entró ya se gastó. */
+function Ring({ pct }: { pct: number | null }) {
+  const r = 56;
+  const c = 2 * Math.PI * r;
+  const shown = pct === null ? 0 : Math.min(1, pct);
+  const color = pct !== null && pct > 1 ? 'var(--status-critical)' : 'var(--chart-single)';
+  return (
+    <div className="ring" role="img" aria-label={pct === null ? 'Sin ingresos este mes' : `Gastaste el ${Math.round(pct * 100)}% de lo que te entró`}>
+      <svg width="132" height="132" viewBox="0 0 132 132">
+        <circle cx="66" cy="66" r={r} fill="none" stroke="var(--chart-track)" strokeWidth="12" />
+        <circle
+          cx="66"
+          cy="66"
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="12"
+          strokeLinecap="round"
+          strokeDasharray={`${shown * c} ${c}`}
+          style={{ transition: 'stroke-dasharray 700ms var(--ease-out)' }}
+        />
+      </svg>
+      <div className="ring-center">
+        <strong className="amount">{pct === null ? '—' : `${Math.round(pct * 100)}%`}</strong>
+        <span>{pct === null ? 'sin ingresos este mes' : 'gastado de lo que entró'}</span>
+      </div>
+    </div>
+  );
 }
 
 export default function ResumenView(props: { summary: Resumen; onSummary: (s: Resumen) => void; run: Run }) {
@@ -39,163 +66,178 @@ export default function ResumenView(props: { summary: Resumen; onSummary: (s: Re
   const hayHistorico = historico.some((h) => h.ingresos || h.gastos);
 
   return (
-    <div className="view-stack">
-      <h2 className="view-title">{monthName(mes.mes)}</h2>
+    <div className="screen">
+      <header className="screen-header">
+        <h1>Resumen</h1>
+        <span className="pill">{monthName(mes.mes)}</span>
+      </header>
 
-      <div className="dashboard-grid">
-        <div className="summary-card income">
-          <div>
-            <div className="card-label">Te entró</div>
-            <AnimatedCurrency value={mes.ingresos} className="card-value" />
+      <section className="card month-card" aria-label="Este mes">
+        <Ring pct={mes.ingresos > 0 ? mes.gastos / mes.ingresos : null} />
+        <div className="stat-list">
+          <div className="stat-line">
+            <IconTile visual={{ Icon: ArrowDownLeft, color: 'var(--income)' }} size="sm" />
+            <div>
+              <span>Te entró</span>
+              <strong className="amount">{fmtCOP(mes.ingresos)}</strong>
+            </div>
           </div>
-          <TrendingUp size={32} color="var(--accent-green)" aria-hidden="true" />
-        </div>
-        <div className="summary-card expense">
-          <div>
-            <div className="card-label">Gastaste</div>
-            <AnimatedCurrency value={mes.gastos} className="card-value" />
+          <div className="stat-line">
+            <IconTile visual={{ Icon: ArrowUpRight, color: 'var(--expense)' }} size="sm" />
+            <div>
+              <span>Gastaste</span>
+              <strong className="amount">{fmtCOP(mes.gastos)}</strong>
+            </div>
           </div>
-          <TrendingDown size={32} color="var(--accent-red)" aria-hidden="true" />
-        </div>
-        <div className="summary-card balance">
-          <div>
-            <div className="card-label">{balance >= 0 ? 'Te sobró' : 'Gastaste de más'}</div>
-            <AnimatedCurrency value={Math.abs(balance)} className="card-value" />
-            <div className="card-hint">Lo que entró menos lo que gastaste este mes</div>
+          <div className="stat-line">
+            <IconTile visual={{ Icon: PiggyBank, color: 'var(--primary)' }} size="sm" />
+            <div>
+              <span>{balance >= 0 ? 'Te sobró' : 'Gastaste de más'}</span>
+              <strong className="amount">{fmtCOP(Math.abs(balance))}</strong>
+            </div>
           </div>
-          <Wallet size={32} color="var(--accent-blue)" aria-hidden="true" />
         </div>
-      </div>
+      </section>
 
-      <div className="premium-panel">
-        <div className="panel-header">
-          <h2>Presupuestos del mes</h2>
-          <button className="btn-primary small" onClick={() => setEditing('new')}>
-            <Plus size={16} /> Agregar
+      <section className="section">
+        <div className="section-head">
+          <h2>Presupuestos</h2>
+          <button className="btn btn-soft btn-sm" onClick={() => setEditing('new')}>
+            <Plus size={16} aria-hidden="true" /> Nuevo
           </button>
         </div>
-        {mes.presupuestos.length === 0 ? (
-          <p className="empty-state">
-            Ponle un tope mensual a lo que más gastas. Toca <strong>Agregar</strong> o dile a Aura: "ponme 600 mil de presupuesto para comida".
-          </p>
-        ) : (
-          <ul className="budget-list">
-            {mes.presupuestos.map((p) => {
+        <div className="card">
+          {mes.presupuestos.length === 0 ? (
+            <p className="empty">
+              Ponle un tope mensual a lo que más gastas. Toca <strong>Nuevo</strong> o dile a Aura: "ponme 600 mil de presupuesto para comida".
+            </p>
+          ) : (
+            mes.presupuestos.map((p) => {
               const st = budgetStatus(p);
               return (
-                <li key={p.categoria}>
-                  <button className="budget-item" onClick={() => setEditing(p)}>
-                    <div className="budget-top">
-                      <span className="budget-name">{p.categoria}</span>
-                      <span className="budget-amounts">
-                        {fmtCOP(p.gastado)} <small>de {fmtCOP(p.monto)}</small>
+                <button key={p.categoria} className={`budget-row status-${st.key}`} onClick={() => setEditing(p)}>
+                  <IconTile visual={groupVisual(p.categoria)} />
+                  <span className="budget-body">
+                    <span className="budget-top">
+                      <span>{p.categoria}</span>
+                      <span className="amount">
+                        {fmtCOP(p.gastado)} <small>/ {fmtCOP(p.monto)}</small>
                       </span>
-                    </div>
-                    <div
-                      className="budget-track"
+                    </span>
+                    <span
+                      className="bar"
                       role="progressbar"
                       aria-valuemin={0}
                       aria-valuemax={100}
                       aria-valuenow={Math.round(st.pct * 100)}
                       aria-label={`${p.categoria}: ${Math.round(st.pct * 100)}% usado`}
                     >
-                      <div className={`budget-fill status-${st.key}`} style={{ width: `${Math.min(100, st.pct * 100)}%` }} />
-                    </div>
-                    <span className={`budget-status status-${st.key}`}>
+                      <span className="bar-fill" style={{ display: 'block', width: `${Math.min(100, st.pct * 100)}%` }} />
+                    </span>
+                    <span className={`status-text status-${st.key}`}>
                       <st.Icon size={14} aria-hidden="true" /> {st.label}
                     </span>
-                  </button>
-                </li>
+                  </span>
+                </button>
               );
-            })}
-          </ul>
-        )}
-      </div>
-
-      <div className="charts-section-grid">
-        <div className="premium-panel">
-          <div className="panel-header">
-            <h2>¿En qué se va tu plata?</h2>
-          </div>
-          {mes.porCategoria.length === 0 ? (
-            <p className="empty-state">Todavía no hay gastos este mes.</p>
-          ) : (
-            <ul className="category-bars">
-              {mes.porCategoria.map((c) => (
-                <li key={c.grupo} title={`${c.grupo}: ${fmtCOP(c.monto)}`}>
-                  <div className="category-bar-label">
-                    <span>{c.grupo}</span>
-                    <span className="category-bar-value">
-                      {fmtCOP(c.monto)} <small>{Math.round((c.monto / Math.max(1, mes.gastos)) * 100)}%</small>
-                    </span>
-                  </div>
-                  <div className="category-bar-track">
-                    <div className="category-bar-fill" style={{ width: `${(c.monto / maxCategoria) * 100}%`, background: COLOR_CATEGORIA }} />
-                  </div>
-                </li>
-              ))}
-            </ul>
+            })
           )}
         </div>
+      </section>
 
-        <div className="premium-panel">
-          <div className="panel-header">
-            <h2>Últimos 6 meses</h2>
-            {hayHistorico && (
-              <button className="btn-ghost small" onClick={() => setShowTable((v) => !v)}>
-                {showTable ? 'Ver gráfica' : 'Ver tabla'}
-              </button>
-            )}
-          </div>
+      <section className="section">
+        <div className="section-head">
+          <h2>¿En qué se va tu plata?</h2>
+        </div>
+        <div className="card">
+          {mes.porCategoria.length === 0 ? (
+            <p className="empty">Todavía no hay gastos este mes.</p>
+          ) : (
+            mes.porCategoria.map((c) => (
+              <div key={c.grupo} className="cat-row">
+                <IconTile visual={groupVisual(c.grupo)} />
+                <span className="budget-body">
+                  <span className="budget-top">
+                    <span>{c.grupo}</span>
+                    <span className="amount">{fmtCOP(c.monto)}</span>
+                  </span>
+                  <span className="bar" aria-hidden="true">
+                    <span className="bar-fill" style={{ display: 'block', width: `${(c.monto / maxCategoria) * 100}%` }} />
+                  </span>
+                  <span className="cat-pct">{Math.round((c.monto / Math.max(1, mes.gastos)) * 100)}% de tus gastos</span>
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-head">
+          <h2>Últimos 6 meses</h2>
+          {hayHistorico && (
+            <button className="link-btn" onClick={() => setShowTable((v) => !v)}>
+              {showTable ? 'Ver gráfica' : 'Ver tabla'}
+            </button>
+          )}
+        </div>
+        <div className="card">
           {!hayHistorico ? (
-            <p className="empty-state">Aquí vas a ver cómo cambian tus ingresos y gastos mes a mes.</p>
+            <p className="empty">Aquí vas a ver cómo cambian tus ingresos y gastos mes a mes.</p>
           ) : showTable ? (
-            <table className="category-table">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Mes</th>
-                  <th className="category-value-col">Te entró</th>
-                  <th className="category-value-col">Gastaste</th>
+                  <th>Te entró</th>
+                  <th>Gastaste</th>
                 </tr>
               </thead>
               <tbody>
                 {historico.map((h) => (
                   <tr key={h.mes}>
                     <td>{monthName(h.mes)}</td>
-                    <td className="category-value-col">{fmtCOP(h.ingresos)}</td>
-                    <td className="category-value-col">{fmtCOP(h.gastos)}</td>
+                    <td className="amount">{fmtCOP(h.ingresos)}</td>
+                    <td className="amount">{fmtCOP(h.gastos)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ) : (
-            <div className="chart-container">
+            <div className="chart-box">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={historico} margin={{ top: 8, right: 4, left: 0, bottom: 0 }} barGap={2} barCategoryGap="28%">
-                  <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.07)" />
-                  <XAxis dataKey="nombre" stroke="var(--text-secondary)" tickLine={false} axisLine={{ stroke: 'rgba(255,255,255,0.12)' }} fontSize={12} />
-                  <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={compact} width={52} fontSize={12} />
+                  <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+                  <XAxis dataKey="nombre" tick={{ fill: 'var(--text-2)', fontSize: 12 }} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
+                  <YAxis tick={{ fill: 'var(--text-2)', fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={compact} width={48} />
                   <Tooltip
-                    cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                    cursor={{ fill: 'var(--surface-3)', opacity: 0.6 }}
                     formatter={(value, name) => [fmtCOP(Number(value)), name]}
                     labelFormatter={(_, payload) => (payload?.[0] ? monthName(payload[0].payload.mes) : '')}
-                    contentStyle={{ background: '#0d1320', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, color: 'var(--text-primary)' }}
-                    itemStyle={{ color: 'var(--text-primary)' }}
+                    contentStyle={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 12,
+                      boxShadow: 'var(--shadow-md)',
+                      color: 'var(--text)',
+                    }}
+                    itemStyle={{ color: 'var(--text)' }}
+                    labelStyle={{ color: 'var(--text-2)', fontWeight: 700 }}
                   />
                   <Legend
-                    wrapperStyle={{ fontSize: 13, color: 'var(--text-secondary)' }}
+                    wrapperStyle={{ fontSize: 13, color: 'var(--text-2)' }}
                     iconType="circle"
                     iconSize={10}
                     itemSorter={(item) => (item.dataKey === 'ingresos' ? 0 : 1)}
                   />
-                  <Bar dataKey="ingresos" name="Te entró" fill={COLOR_INGRESOS} radius={[4, 4, 0, 0]} maxBarSize={24} />
-                  <Bar dataKey="gastos" name="Gastaste" fill={COLOR_GASTOS} radius={[4, 4, 0, 0]} maxBarSize={24} />
+                  <Bar dataKey="ingresos" name="Te entró" fill="var(--chart-income)" radius={[4, 4, 0, 0]} maxBarSize={22} isAnimationActive={!reducedMotion} />
+                  <Bar dataKey="gastos" name="Gastaste" fill="var(--chart-expense)" radius={[4, 4, 0, 0]} maxBarSize={22} isAnimationActive={!reducedMotion} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {editing && (
         <BudgetSheet
@@ -245,37 +287,36 @@ function BudgetSheet(props: {
 
   return (
     <Sheet title={presupuesto ? `Presupuesto de ${presupuesto.categoria}` : 'Nuevo presupuesto'} onClose={onClose}>
-      <form className="sheet-form" onSubmit={save}>
+      <form className="form" onSubmit={save}>
         {!presupuesto && (
-          <label className="form-field">
-            <span>Categoría</span>
-            <select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+          <div className="field">
+            <label htmlFor="categoria-presupuesto">Categoría</label>
+            <select id="categoria-presupuesto" className="input" value={categoria} onChange={(e) => setCategoria(e.target.value)}>
               {grupos.map((g) => (
                 <option key={g}>{g}</option>
               ))}
             </select>
-          </label>
+          </div>
         )}
-        <div className="form-field">
+        <div className="field">
           <label htmlFor="monto-presupuesto">¿Cuánto quieres gastar como máximo al mes?</label>
           <MoneyInput id="monto-presupuesto" value={monto} onChange={setMonto} autoFocus />
         </div>
-        <button type="submit" className="btn-primary" disabled={saving || !categoria || !(value > 0)}>
-          {saving ? 'Guardando…' : 'Guardar'}
+        <button type="submit" className="btn btn-primary btn-block" disabled={saving || !categoria || !(value > 0)}>
+          {saving ? <span className="spinner" aria-label="Guardando" /> : 'Guardar'}
         </button>
         {presupuesto && (
-          <div className="sheet-secondary-actions">
-            <button type="button" className="btn-ghost danger" onClick={() => setConfirmDelete(true)} disabled={saving}>
-              Quitar presupuesto
-            </button>
-          </div>
+          <button type="button" className="btn btn-danger btn-block" onClick={() => setConfirmDelete(true)} disabled={saving}>
+            <Trash2 size={18} aria-hidden="true" /> Quitar presupuesto
+          </button>
         )}
       </form>
       {confirmDelete && (
         <ConfirmDialog
           title="¿Quitar este presupuesto?"
-          confirmLabel="Sí, quitar"
+          confirmLabel="Quitar"
           danger
+          icon={Trash2}
           busy={saving}
           onConfirm={remove}
           onCancel={() => setConfirmDelete(false)}

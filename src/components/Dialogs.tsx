@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
-import { X } from 'lucide-react';
+import { CircleAlert, X, type LucideIcon } from 'lucide-react';
 import { formatMoneyInput } from '../lib/labels';
 
 export function ConfirmDialog(props: {
@@ -8,25 +8,26 @@ export function ConfirmDialog(props: {
   confirmLabel: string;
   busy?: boolean;
   danger?: boolean;
+  icon?: LucideIcon;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   useEscape(props.onCancel);
+  const Icon = props.icon ?? CircleAlert;
   return (
-    <div className="logout-confirm-overlay" role="dialog" aria-modal="true" aria-label={props.title}>
-      <div className="logout-confirm-dialog">
-        <p className="dialog-title">{props.title}</p>
-        {props.message && <div className="dialog-message">{props.message}</div>}
-        <div className="logout-confirm-actions">
-          <button className="btn-cancel-logout" onClick={props.onCancel} disabled={props.busy}>
+    <div className="overlay" onClick={props.onCancel}>
+      <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dialog-title" onClick={(e) => e.stopPropagation()}>
+        <div className={`dialog-icon${props.danger ? ' danger' : ''}`} aria-hidden="true">
+          <Icon size={26} />
+        </div>
+        <h2 id="dialog-title">{props.title}</h2>
+        {props.message && <p>{props.message}</p>}
+        <div className="dialog-actions">
+          <button className="btn btn-ghost" onClick={props.onCancel} disabled={props.busy}>
             Cancelar
           </button>
-          <button
-            className={`btn-confirm-logout${props.danger ? '' : ' safe'}`}
-            onClick={props.onConfirm}
-            disabled={props.busy}
-          >
-            {props.busy ? 'Un momento…' : props.confirmLabel}
+          <button className={`btn ${props.danger ? 'btn-danger solid' : 'btn-primary'}`} onClick={props.onConfirm} disabled={props.busy}>
+            {props.busy ? <span className="spinner" aria-label="Un momento" /> : props.confirmLabel}
           </button>
         </div>
       </div>
@@ -34,16 +35,17 @@ export function ConfirmDialog(props: {
   );
 }
 
-/** Hoja inferior (en el celular) o diálogo centrado (en pantallas grandes) con un formulario. */
+/** Hoja que sube desde abajo (en pantallas grandes, diálogo centrado). */
 export function Sheet(props: { title: string; onClose: () => void; children: ReactNode }) {
   useEscape(props.onClose);
   return (
-    <div className="sheet-overlay" role="dialog" aria-modal="true" aria-label={props.title} onClick={props.onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+    <div className="overlay" onClick={props.onClose}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-label={props.title} onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grip" aria-hidden="true" />
         <div className="sheet-header">
           <h2>{props.title}</h2>
           <button className="icon-btn" onClick={props.onClose} aria-label="Cerrar">
-            <X size={20} />
+            <X size={22} />
           </button>
         </div>
         {props.children}
@@ -52,7 +54,7 @@ export function Sheet(props: { title: string; onClose: () => void; children: Rea
   );
 }
 
-export function MoneyInput(props: { id: string; value: string; onChange: (v: string) => void; placeholder?: string; autoFocus?: boolean }) {
+export function MoneyInput(props: { id: string; value: string; onChange: (v: string) => void; autoFocus?: boolean }) {
   return (
     <div className="money-input">
       <span aria-hidden="true">$</span>
@@ -61,7 +63,7 @@ export function MoneyInput(props: { id: string; value: string; onChange: (v: str
         inputMode="numeric"
         autoComplete="off"
         value={props.value}
-        placeholder={props.placeholder ?? '0'}
+        placeholder="0"
         autoFocus={props.autoFocus}
         onChange={(e) => props.onChange(formatMoneyInput(e.target.value))}
       />

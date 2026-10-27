@@ -1,100 +1,79 @@
 import { useMemo, useState } from 'react';
-import { ArrowRightLeft, Camera, Mic, RotateCcw, Scale, Search, Trash2, TrendingDown, TrendingUp } from 'lucide-react';
+import { Search } from 'lucide-react';
 import type { Movimiento, TipoMovimiento } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
-import { formatDate } from '../lib/labels';
-import { ConfirmDialog } from './Dialogs';
+import { dayKey, dayLabel } from '../lib/labels';
+import { TxRow } from './TxRow';
 
-const TYPE_ICONS: Record<TipoMovimiento, typeof TrendingUp> = {
-  ingreso: TrendingUp,
-  gasto: TrendingDown,
-  transferencia: ArrowRightLeft,
-  ajuste: Scale,
-};
+const TYPE_FILTERS: { value: 'todos' | TipoMovimiento; label: string }[] = [
+  { value: 'todos', label: 'Todos' },
+  { value: 'gasto', label: 'Gastos' },
+  { value: 'ingreso', label: 'Ingresos' },
+  { value: 'transferencia', label: 'Transferencias' },
+  { value: 'ajuste', label: 'Ajustes' },
+];
 
-function amountText(m: Movimiento): string {
-  if (m.tipo === 'ingreso') return `+${fmtCOP(m.monto)}`;
-  if (m.tipo === 'gasto') return `-${fmtCOP(m.monto)}`;
-  if (m.tipo === 'ajuste') return `${m.monto >= 0 ? '+' : '-'}${fmtCOP(Math.abs(m.monto))}`;
-  return fmtCOP(m.monto);
-}
-
-export default function HistorialView(props: {
-  transactions: Movimiento[];
-  onDelete: (id: number) => Promise<void>;
-  onReset: () => Promise<void>;
-}) {
-  const { transactions, onDelete, onReset } = props;
+export default function HistorialView(props: { transactions: Movimiento[]; onOpenTx: (m: Movimiento) => void }) {
+  const { transactions, onOpenTx } = props;
   const [query, setQuery] = useState('');
   const [tipo, setTipo] = useState<'todos' | TipoMovimiento>('todos');
   const [cuenta, setCuenta] = useState('todas');
   const [categoria, setCategoria] = useState('todas');
-  const [toDelete, setToDelete] = useState<Movimiento | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const cuentas = useMemo(
     () => Array.from(new Set(transactions.flatMap((t) => [t.cuenta, t.cuenta_destino ?? '']).filter(Boolean))).sort(),
     [transactions],
   );
-  const categorias = useMemo(() => Array.from(new Set(transactions.map((t) => t.categoria))).sort(), [transactions]);
+  const categorias = useMemo(
+    () =>
+      Array.from(new Set(transactions.filter((t) => t.tipo === 'gasto' || t.tipo === 'ingreso').map((t) => t.categoria))).sort(),
+    [transactions],
+  );
 
-  const filtered = transactions.filter((t) => {
+  const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const matchesQuery = !q || [t.descripcion, t.categoria, t.cuenta, t.cuenta_destino ?? ''].some((s) => s.toLowerCase().includes(q));
-    return (
-      matchesQuery &&
-      (tipo === 'todos' || t.tipo === tipo) &&
-      (cuenta === 'todas' || t.cuenta === cuenta || t.cuenta_destino === cuenta) &&
-      (categoria === 'todas' || t.categoria === categoria)
+    const filtered = transactions.filter(
+      (t) =>
+        (!q || [t.descripcion, t.categoria, t.cuenta, t.cuenta_destino ?? ''].some((s) => s.toLowerCase().includes(q))) &&
+        (tipo === 'todos' || t.tipo === tipo) &&
+        (cuenta === 'todas' || t.cuenta === cuenta || t.cuenta_destino === cuenta) &&
+        (categoria === 'todas' || t.categoria === categoria),
     );
-  });
-
-  async function run(fn: () => Promise<void>) {
-    setBusy(true);
-    try {
-      await fn();
-    } finally {
-      setBusy(false);
-      setToDelete(null);
-      setConfirmReset(false);
+    const byDay = new Map<string, Movimiento[]>();
+    for (const t of filtered) {
+      const key = dayKey(t.fecha);
+      byDay.set(key, [...(byDay.get(key) ?? []), t]);
     }
-  }
+    return { count: filtered.length, days: [...byDay.entries()] };
+  }, [transactions, query, tipo, cuenta, categoria]);
 
   return (
-    <div className="history-panel">
-      <div className="panel-header">
-        <h2>Historial</h2>
-        <span className="panel-count">{filtered.length} movimientos</span>
-      </div>
+    <div className="screen">
+      <header className="screen-header">
+        <h1>Movimientos</h1>
+        <span className="pill">{groups.count}</span>
+      </header>
 
-      <div className="history-toolbar">
-        <div className="search-input-wrapper">
-          <Search size={18} className="search-icon" aria-hidden="true" />
-          <input
-            type="search"
-            placeholder="Buscar…"
-            aria-label="Buscar movimientos"
-            className="search-input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+      <div className="filters">
+        <label className="search-field">
+          <Search size={18} aria-hidden="true" />
+          <input type="search" placeholder="Buscar movimientos" aria-label="Buscar movimientos" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </label>
+        <div className="chips" role="group" aria-label="Tipo de movimiento">
+          {TYPE_FILTERS.map((f) => (
+            <button key={f.value} className="chip" aria-pressed={tipo === f.value} onClick={() => setTipo(f.value)}>
+              {f.label}
+            </button>
+          ))}
         </div>
-        <div className="filter-group">
-          <select className="filter-select" value={tipo} onChange={(e) => setTipo(e.target.value as typeof tipo)} aria-label="Tipo">
-            <option value="todos">Todos</option>
-            <option value="gasto">Gastos</option>
-            <option value="ingreso">Ingresos</option>
-            <option value="transferencia">Transferencias</option>
-            <option value="ajuste">Ajustes de saldo</option>
-          </select>
-          <select className="filter-select" value={cuenta} onChange={(e) => setCuenta(e.target.value)} aria-label="Cuenta">
+        <div className="select-row">
+          <select className="select" value={cuenta} onChange={(e) => setCuenta(e.target.value)} aria-label="Filtrar por cuenta">
             <option value="todas">Todas las cuentas</option>
             {cuentas.map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>
-          <select className="filter-select" value={categoria} onChange={(e) => setCategoria(e.target.value)} aria-label="Categoría">
+          <select className="select" value={categoria} onChange={(e) => setCategoria(e.target.value)} aria-label="Filtrar por categoría">
             <option value="todas">Todas las categorías</option>
             {categorias.map((c) => (
               <option key={c}>{c}</option>
@@ -103,68 +82,29 @@ export default function HistorialView(props: {
         </div>
       </div>
 
-      <ul className="transaction-list">
-        {filtered.length === 0 ? (
-          <li className="empty-state">
-            {transactions.length === 0 ? 'Aún no hay movimientos. Cuéntale a Aura tu primer gasto 😉' : 'No hay movimientos con esos filtros.'}
-          </li>
-        ) : (
-          filtered.map((t) => {
-            const Icon = TYPE_ICONS[t.tipo];
-            return (
-              <li key={t.id} className="transaction-item">
-                <span className={`tx-icon tipo-${t.tipo}`} aria-hidden="true">
-                  <Icon size={16} />
-                </span>
-                <div className="tx-info">
-                  <div className="tx-desc">
-                    {t.descripcion || t.categoria}
-                    {t.fuente === 'voz' && <Mic size={12} className="tx-source" aria-label="Por nota de voz" />}
-                    {t.fuente === 'foto' && <Camera size={12} className="tx-source" aria-label="Por foto" />}
-                  </div>
-                  <div className="tx-meta">
-                    {t.tipo !== 'transferencia' && t.tipo !== 'ajuste' && <span className="tx-cat">{t.categoria}</span>}
-                    <span>{t.cuenta_destino ? `${t.cuenta} → ${t.cuenta_destino}` : t.cuenta}</span>
-                  </div>
-                  <div className="tx-date">{formatDate(t.fecha)}</div>
-                </div>
-                <div className="tx-amount-section">
-                  <span className={`tx-amount ${t.tipo}${t.tipo === 'ajuste' && t.monto < 0 ? ' negativo' : ''}`}>{amountText(t)}</span>
-                  <button className="btn-delete" onClick={() => setToDelete(t)} aria-label={`Eliminar ${t.descripcion}`}>
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </li>
-            );
-          })
-        )}
-      </ul>
-
-      <button className="btn-ghost danger reset-btn" onClick={() => setConfirmReset(true)}>
-        <RotateCcw size={16} /> Borrar todo y empezar de cero
-      </button>
-
-      {toDelete && (
-        <ConfirmDialog
-          title="¿Eliminar este movimiento?"
-          message={`${toDelete.descripcion} · ${amountText(toDelete)}. Los saldos se recalculan solos.`}
-          confirmLabel="Sí, eliminar"
-          danger
-          busy={busy}
-          onConfirm={() => run(() => onDelete(toDelete.id))}
-          onCancel={() => setToDelete(null)}
-        />
-      )}
-      {confirmReset && (
-        <ConfirmDialog
-          title="⚠️ ¿Borrar todo?"
-          message="Se borran todos tus movimientos, cuentas y presupuestos. Esto no se puede deshacer."
-          confirmLabel="Sí, borrar todo"
-          danger
-          busy={busy}
-          onConfirm={() => run(onReset)}
-          onCancel={() => setConfirmReset(false)}
-        />
+      {groups.count === 0 ? (
+        <div className="card">
+          <p className="empty">
+            {transactions.length === 0 ? 'Aún no hay movimientos. Cuéntale a Aura tu primer gasto.' : 'No hay movimientos con esos filtros.'}
+          </p>
+        </div>
+      ) : (
+        groups.days.map(([key, items]) => {
+          const gastado = items.filter((t) => t.tipo === 'gasto').reduce((s, t) => s + t.monto, 0);
+          return (
+            <section key={key} className="day-group" aria-label={dayLabel(key)}>
+              <h2 className="day-label">
+                <span>{dayLabel(key)}</span>
+                {gastado > 0 && <span className="amount">Gastaste {fmtCOP(gastado)}</span>}
+              </h2>
+              <div className="card flush tx-list">
+                {items.map((t) => (
+                  <TxRow key={t.id} m={t} when="time" onClick={() => onOpenTx(t)} />
+                ))}
+              </div>
+            </section>
+          );
+        })
       )}
     </div>
   );

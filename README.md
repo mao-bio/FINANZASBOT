@@ -23,7 +23,7 @@ Se instala en el celular como una app más (sin tienda de apps).
 | 🎯 **Presupuestos** | Topes mensuales por categoría con avisos claros: *vas bien*, *ojo*, *te pasaste*. |
 | 📊 **Resumen** | Cuánto te entró, cuánto gastaste y en qué, más la evolución de los últimos 6 meses. |
 | ↩️ **Deshacer** | Cada movimiento que registra la IA trae un botón para deshacerlo si entendió mal. |
-| 📱 **App instalable (PWA)** | Desde el navegador del celular: "Agregar a pantalla de inicio". |
+| 📱 **App instalable (PWA)** | Desde el navegador del celular: "Agregar a pantalla de inicio". Diseño fintech claro con modo oscuro automático. |
 | 🔒 **Privada** | Solo tú entras (usuario + contraseña, sesión firmada, freno a intentos fallidos). |
 
 ### Así le puedes hablar a Aura
@@ -64,7 +64,7 @@ Celular (PWA React)  ──►  Cloudflare Worker (Hono)  ──►  D1 (SQLite)
 | Carpeta | Qué hay |
 | :--- | :--- |
 | `worker/` | API: sesión (`auth.ts`), finanzas y saldos (`finance.ts`), IA (`ai.ts`), tablas (`schema.ts`) |
-| `src/` | App React: chat, cuentas, resumen, historial |
+| `src/` | App React: inicio, chat con Aura, cuentas, resumen, movimientos |
 | `shared/` | Tipos y formato de pesos compartidos |
 | `public/` | Manifiesto de la app, service worker e íconos |
 | `test/` | Pruebas del Worker (con una IA simulada) |

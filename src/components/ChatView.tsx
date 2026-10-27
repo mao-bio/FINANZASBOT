@@ -1,52 +1,63 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Camera, Mic, Send, Square, Undo2, X } from 'lucide-react';
+import {
+  Camera,
+  ChartPie,
+  CircleAlert,
+  CircleCheck,
+  Lightbulb,
+  Mic,
+  Send,
+  Sparkles,
+  Square,
+  Target,
+  Undo2,
+  Wallet,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import type { MensajeHistorial, Movimiento, Resumen, RespuestaChat } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
 import { api, SessionExpiredError } from '../lib/api';
 import { MAX_RECORDING_SECONDS, pickAudioMimeType, prepareReceiptPhoto, recordingToWav } from '../lib/media';
-import { txSummary } from '../lib/labels';
-import AnimatedCurrency from './AnimatedCurrency';
+import { TxRow } from './TxRow';
 
-interface ChatMsg {
-  id: string;
-  sender: 'user' | 'bot' | 'system';
-  text: string;
-  thumb?: string;
-  tx?: Movimiento;
-  undone?: boolean;
-  error?: boolean;
-}
+type ChatMsg =
+  | { id: string; kind: 'user'; text: string; thumb?: string }
+  | { id: string; kind: 'bot'; text: string }
+  | { id: string; kind: 'tx'; tx: Movimiento; undone?: boolean }
+  | { id: string; kind: 'note'; text: string; tone: 'cuenta' | 'presupuesto' | 'error' };
 
-const STORAGE_KEY = 'fb_chat_v2';
+const STORAGE_KEY = 'fb_chat_v3';
 const SUGGESTIONS = ['¿Cuánto tengo?', '¿Cómo voy este mes?', '¿En qué gasto más?', 'Dame un consejo para ahorrar'];
+const PROMPTS: { text: string; Icon: LucideIcon }[] = [
+  { text: '¿Cuánto tengo?', Icon: Wallet },
+  { text: '¿En qué gasto más este mes?', Icon: ChartPie },
+  { text: '¿Cómo voy con mis presupuestos?', Icon: Target },
+  { text: 'Dame un consejo para ahorrar', Icon: Lightbulb },
+];
+const NOTE_ICONS: Record<'cuenta' | 'presupuesto' | 'error', LucideIcon> = {
+  cuenta: Wallet,
+  presupuesto: Target,
+  error: CircleAlert,
+};
 
 const newId = () => Math.random().toString(36).slice(2);
 
-function welcome(user: string): ChatMsg {
-  return {
-    id: 'welcome',
-    sender: 'bot',
-    text:
-      `¡Hola ${user}! Soy Aura 💸 Cuéntame tus movimientos como le hablarías a un amigo: ` +
-      '"gasté 20 mil en almuerzo con Nequi", "me llegó la quincena", "pasé 100 mil a ahorros". ' +
-      'También me puedes mandar una nota de voz 🎤 o la foto de un recibo 📷.',
-  };
-}
-
-function loadMessages(user: string): ChatMsg[] {
+function loadMessages(): ChatMsg[] {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
-    if (Array.isArray(saved) && saved.length) return saved;
+    if (Array.isArray(saved)) return saved;
   } catch {
     /* sin almacenamiento disponible */
   }
-  return [welcome(user)];
+  return [];
 }
 
 function saveMessages(messages: ChatMsg[]) {
   try {
     // Sin miniaturas para no llenar el almacenamiento del celular
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-60).map(({ thumb: _thumb, ...m }) => m)));
+    const slim = messages.slice(-60).map((m) => (m.kind === 'user' ? { ...m, thumb: undefined } : m));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
   } catch {
     /* sin almacenamiento disponible */
   }
@@ -62,20 +73,22 @@ export function clearChatHistory() {
 
 function toHistory(messages: ChatMsg[]): MensajeHistorial[] {
   return messages
-    .filter((m) => (m.sender === 'user' || m.sender === 'bot') && m.id !== 'welcome')
+    .filter((m): m is Extract<ChatMsg, { kind: 'user' | 'bot' }> => m.kind === 'user' || m.kind === 'bot')
     .slice(-8)
-    .map((m) => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text }));
+    .map((m) => ({ role: m.kind === 'user' ? 'user' : 'assistant', content: m.text }));
 }
 
 export default function ChatView(props: {
   user: string;
   summary: Resumen | null;
+  initialPrompt: string | null;
+  onPromptUsed: () => void;
   onResult: (r: RespuestaChat) => void;
-  onUndo: (id: number) => Promise<void>;
+  onUndo: (id: number) => Promise<boolean>;
   onSessionExpired: () => void;
 }) {
   const { user, summary, onResult, onUndo, onSessionExpired } = props;
-  const [messages, setMessages] = useState<ChatMsg[]>(() => loadMessages(user));
+  const [messages, setMessages] = useState<ChatMsg[]>(loadMessages);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -85,6 +98,7 @@ export default function ChatView(props: {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const cancelledRef = useRef(false);
   const messagesRef = useRef(messages);
+  const promptSentRef = useRef(false);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -94,6 +108,15 @@ export default function ChatView(props: {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, busy]);
+
+  // Pregunta que llega desde otra pantalla (ej. "Hablar con Aura" en Inicio)
+  useEffect(() => {
+    if (props.initialPrompt && !promptSentRef.current) {
+      promptSentRef.current = true;
+      sendText(props.initialPrompt);
+      props.onPromptUsed();
+    }
+  }, [props.initialPrompt]);
 
   useEffect(() => {
     if (!recording) return;
@@ -107,30 +130,29 @@ export default function ChatView(props: {
   }, [recording, seconds]);
 
   const push = (...msgs: ChatMsg[]) => setMessages((prev) => [...prev, ...msgs]);
+  const pushError = (text: string) => push({ id: newId(), kind: 'note', tone: 'error', text });
 
-  async function send(payload: { message?: string; audio?: string; image?: string }, userMsg: ChatMsg) {
+  async function send(payload: { message?: string; audio?: string; image?: string }, userMsg: Extract<ChatMsg, { kind: 'user' }>) {
     const history = toHistory(messagesRef.current);
     push(userMsg);
     setBusy(true);
     try {
       const r = await api.chat({ ...payload, history });
       if (r.transcript) {
-        setMessages((prev) => prev.map((m) => (m.id === userMsg.id ? { ...m, text: `🎤 "${r.transcript}"` } : m)));
+        setMessages((prev) => prev.map((m) => (m.id === userMsg.id ? { ...m, text: r.transcript! } : m)));
       }
-      const extras: ChatMsg[] = [
-        ...r.applied.movimientos.map((tx) => ({ id: newId(), sender: 'system' as const, text: txSummary(tx), tx })),
-        ...r.applied.cuentasCreadas.map((nombre) => ({ id: newId(), sender: 'system' as const, text: `🆕 Nueva cuenta: ${nombre}` })),
-        ...r.applied.presupuestos.map((p) => ({
-          id: newId(),
-          sender: 'system' as const,
-          text: `🎯 Presupuesto de ${p.categoria}: ${fmtCOP(p.monto)} al mes`,
-        })),
-      ];
-      push({ id: newId(), sender: 'bot', text: r.reply }, ...extras);
+      push(
+        { id: newId(), kind: 'bot', text: r.reply },
+        ...r.applied.movimientos.map((tx): ChatMsg => ({ id: newId(), kind: 'tx', tx })),
+        ...r.applied.cuentasCreadas.map((nombre): ChatMsg => ({ id: newId(), kind: 'note', tone: 'cuenta', text: `Nueva cuenta: ${nombre}` })),
+        ...r.applied.presupuestos.map(
+          (p): ChatMsg => ({ id: newId(), kind: 'note', tone: 'presupuesto', text: `Presupuesto de ${p.categoria}: ${fmtCOP(p.monto)} al mes` }),
+        ),
+      );
       onResult(r);
     } catch (err) {
       if (err instanceof SessionExpiredError) return onSessionExpired();
-      push({ id: newId(), sender: 'system', error: true, text: `❌ ${err instanceof Error ? err.message : 'No se pudo enviar.'}` });
+      pushError(err instanceof Error ? err.message : 'No se pudo enviar.');
     } finally {
       setBusy(false);
     }
@@ -140,7 +162,7 @@ export default function ChatView(props: {
     const message = text.trim();
     if (!message || busy) return;
     setInput('');
-    void send({ message }, { id: newId(), sender: 'user', text: message });
+    void send({ message }, { id: newId(), kind: 'user', text: message });
   }
 
   function handleSubmit(e: FormEvent) {
@@ -154,22 +176,22 @@ export default function ChatView(props: {
     setInput('');
     try {
       const { image, thumb } = await prepareReceiptPhoto(file);
-      await send({ image, message: note }, { id: newId(), sender: 'user', text: note || '📷 Foto de recibo', thumb });
+      await send({ image, message: note }, { id: newId(), kind: 'user', text: note || 'Foto de un recibo', thumb });
     } catch {
-      push({ id: newId(), sender: 'system', error: true, text: '❌ No pude abrir esa foto. Intenta con otra.' });
+      pushError('No pude abrir esa foto. Intenta con otra.');
     }
   }
 
   async function startRecording() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      push({ id: newId(), sender: 'system', error: true, text: '❌ Tu navegador no permite grabar audio. Escríbeme el movimiento.' });
+      pushError('Tu navegador no permite grabar audio. Escríbeme el movimiento.');
       return;
     }
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch {
-      push({ id: newId(), sender: 'system', error: true, text: '❌ No tengo permiso para usar el micrófono. Actívalo en los ajustes del navegador.' });
+      pushError('No tengo permiso para usar el micrófono. Actívalo en los ajustes del navegador.');
       return;
     }
     const mimeType = pickAudioMimeType();
@@ -180,12 +202,11 @@ export default function ChatView(props: {
     recorder.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
       if (cancelledRef.current || !chunks.length) return;
-      const userMsg: ChatMsg = { id: newId(), sender: 'user', text: '🎤 Nota de voz…' };
       try {
         const audio = await recordingToWav(new Blob(chunks, { type: recorder.mimeType }));
-        await send({ audio }, userMsg);
+        await send({ audio }, { id: newId(), kind: 'user', text: 'Nota de voz…' });
       } catch {
-        push({ id: newId(), sender: 'system', error: true, text: '❌ No pude procesar la nota de voz. Intenta otra vez.' });
+        pushError('No pude procesar la nota de voz. Intenta otra vez.');
       }
     };
     recorderRef.current = recorder;
@@ -203,106 +224,150 @@ export default function ChatView(props: {
     stopRecording();
   }
 
-  async function undo(msg: ChatMsg) {
-    if (!msg.tx) return;
-    try {
-      await onUndo(msg.tx.id);
-      setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, undone: true } : m)));
-    } catch (err) {
-      if (err instanceof SessionExpiredError) return onSessionExpired();
-      push({ id: newId(), sender: 'system', error: true, text: `❌ ${err instanceof Error ? err.message : 'No se pudo deshacer.'}` });
+  async function undo(msg: Extract<ChatMsg, { kind: 'tx' }>) {
+    if (await onUndo(msg.tx.id)) {
+      setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...msg, undone: true } : m)));
     }
   }
 
+  const hasConversation = messages.some((m) => m.kind === 'user');
   const timer = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
   return (
-    <div className="web-chat-layout">
-      <div className="web-chat-main">
+    <div className="chat-screen">
+      <header className="chat-header">
+        <span className="aura-orb" aria-hidden="true">
+          <Sparkles size={20} />
+        </span>
+        <div>
+          <h1>Aura</h1>
+          <p>
+            <span className="online-dot" aria-hidden="true" /> Tu asistente de plata
+          </p>
+        </div>
         {summary && (
-          <div className="chat-balance-strip" aria-label="Resumen de saldos">
-            <span>
-              Tienes <strong>{fmtCOP(summary.totales.tienes)}</strong>
+          <div className="header-balance">
+            Tienes
+            <strong className="amount">{fmtCOP(summary.totales.tienes)}</strong>
+          </div>
+        )}
+      </header>
+
+      <div className="chat-scroll" aria-live="polite">
+        {!hasConversation && (
+          <div className="chat-empty">
+            <span className="aura-orb xl" aria-hidden="true">
+              <Sparkles size={40} />
             </span>
-            {summary.totales.debes > 0 && (
-              <span>
-                Debes <strong className="debt">{fmtCOP(summary.totales.debes)}</strong>
-              </span>
-            )}
+            <h2>Hola, {user}. ¿Qué anotamos hoy?</h2>
+            <p>Escríbeme como le hablarías a un amigo, mándame una nota de voz o la foto de un recibo. Yo llevo las cuentas.</p>
+            <div className="prompt-grid">
+              {PROMPTS.map(({ text, Icon }) => (
+                <button key={text} className="prompt-card" onClick={() => sendText(text)} disabled={busy}>
+                  <Icon size={20} color="var(--primary)" aria-hidden="true" />
+                  {text}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
-        <div className="web-chat-messages" aria-live="polite">
-          {messages.map((msg) => (
-            <div key={msg.id} className={`chat-bubble-wrapper ${msg.sender}`}>
-              {msg.sender === 'bot' && (
-                <div className="bot-avatar" aria-hidden="true">
-                  A
-                </div>
-              )}
-              <div
-                className={`chat-bubble ${msg.sender}${msg.sender === 'system' ? (msg.error ? ' error' : ' success') : ''}${msg.undone ? ' undone' : ''}`}
-              >
-                {msg.thumb && <img className="chat-thumb" src={msg.thumb} alt="Foto del recibo" />}
-                <span>{msg.tx ? `${msg.undone ? '↩️ Deshecho: ' : '✅ '}${msg.text}` : msg.text}</span>
-                {msg.tx && !msg.undone && (
-                  <button className="undo-btn" onClick={() => undo(msg)} aria-label="Deshacer este movimiento">
-                    <Undo2 size={14} /> Deshacer
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-          {busy && (
-            <div className="chat-bubble-wrapper bot">
-              <div className="bot-avatar" aria-hidden="true">
-                A
-              </div>
-              <div className="chat-bubble bot">
-                <div className="typing-indicator" aria-label="Aura está pensando">
-                  <div className="typing-dot"></div>
-                  <div className="typing-dot"></div>
-                  <div className="typing-dot"></div>
+        {messages.map((m) => {
+          if (m.kind === 'user') {
+            return (
+              <div key={m.id} className="msg user">
+                <div className="bubble">
+                  {m.thumb && <img src={m.thumb} alt="Foto del recibo enviada" />}
+                  {m.text}
                 </div>
               </div>
+            );
+          }
+          if (m.kind === 'bot') {
+            return (
+              <div key={m.id} className="msg bot">
+                <span className="aura-orb sm" aria-hidden="true">
+                  <Sparkles size={14} />
+                </span>
+                <div className="bubble">{m.text}</div>
+              </div>
+            );
+          }
+          if (m.kind === 'tx') {
+            return (
+              <div key={m.id} className="msg system">
+                <div className={`ticket${m.undone ? ' undone' : ''}`}>
+                  <div className="ticket-status">
+                    {m.undone ? <Undo2 size={14} aria-hidden="true" /> : <CircleCheck size={14} aria-hidden="true" />}
+                    {m.undone ? 'Deshecho' : 'Registrado'}
+                  </div>
+                  <TxRow m={m.tx} />
+                  {!m.undone && (
+                    <div className="ticket-actions">
+                      <button className="btn btn-soft btn-sm" onClick={() => undo(m)}>
+                        <Undo2 size={16} aria-hidden="true" /> Deshacer
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          }
+          const Icon = NOTE_ICONS[m.tone];
+          return (
+            <div key={m.id} className="msg system">
+              <div className={`note${m.tone === 'error' ? ' error' : ''}`} role={m.tone === 'error' ? 'alert' : undefined}>
+                <Icon size={16} aria-hidden="true" /> {m.text}
+              </div>
             </div>
-          )}
-          <div ref={endRef} />
-        </div>
+          );
+        })}
 
-        <div className="suggestion-row" role="list">
-          {SUGGESTIONS.map((s) => (
-            <button key={s} role="listitem" className="suggestion-chip" onClick={() => sendText(s)} disabled={busy || recording}>
-              {s}
-            </button>
-          ))}
-        </div>
+        {busy && (
+          <div className="msg bot">
+            <span className="aura-orb sm" aria-hidden="true">
+              <Sparkles size={14} />
+            </span>
+            <div className="bubble">
+              <span className="typing" aria-label="Aura está pensando">
+                <span />
+                <span />
+                <span />
+              </span>
+            </div>
+          </div>
+        )}
+        <div ref={endRef} />
+      </div>
 
-        <div className="web-chat-input-bar">
+      <div className="composer">
+        {hasConversation && (
+          <div className="chips">
+            {SUGGESTIONS.map((s) => (
+              <button key={s} className="chip" onClick={() => sendText(s)} disabled={busy || recording}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="composer-bar">
           {recording ? (
-            <div className="recording-status">
+            <div className="rec">
               <button type="button" className="icon-btn" onClick={cancelRecording} aria-label="Cancelar grabación">
                 <X size={20} />
               </button>
-              <span className="recording-dot-active" aria-hidden="true"></span>
-              <span className="recording-label">
-                Grabando {timer} <small>/ 1:00</small>
+              <span className="rec-dot" aria-hidden="true" />
+              <span className="rec-time">
+                {timer} <small>/ 1:00</small>
               </span>
-              <button type="button" className="mic-btn recording" onClick={stopRecording} aria-label="Detener y enviar">
-                <Square size={18} />
+              <button type="button" className="send-btn" onClick={stopRecording} aria-label="Detener y enviar nota de voz">
+                <Square size={16} fill="currentColor" />
               </button>
             </div>
           ) : (
             <>
-              <button
-                type="button"
-                className="mic-btn"
-                onClick={() => fileRef.current?.click()}
-                disabled={busy}
-                aria-label="Tomar foto de un recibo"
-                title="Foto de un recibo"
-              >
-                <Camera size={20} />
+              <button type="button" className="icon-btn" onClick={() => fileRef.current?.click()} disabled={busy} aria-label="Tomar foto de un recibo">
+                <Camera size={22} />
               </button>
               <input
                 ref={fileRef}
@@ -315,13 +380,9 @@ export default function ChatView(props: {
                   e.target.value = '';
                 }}
               />
-              <button type="button" className="mic-btn" onClick={startRecording} disabled={busy} aria-label="Grabar nota de voz" title="Nota de voz">
-                <Mic size={20} />
-              </button>
-              <form onSubmit={handleSubmit} className="chat-input-form">
+              <form onSubmit={handleSubmit}>
                 <input
                   type="text"
-                  className="chat-input"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   placeholder="Ej: gasté 20 mil en almuerzo"
@@ -331,53 +392,20 @@ export default function ChatView(props: {
                   maxLength={1000}
                   disabled={busy}
                 />
-                <button type="submit" className="btn-send" disabled={busy || !input.trim()} aria-label="Enviar mensaje">
-                  <Send size={18} />
-                </button>
+                {input.trim() ? (
+                  <button type="submit" className="send-btn" disabled={busy} aria-label="Enviar mensaje">
+                    <Send size={18} />
+                  </button>
+                ) : (
+                  <button type="button" className="send-btn" onClick={startRecording} disabled={busy} aria-label="Grabar nota de voz">
+                    <Mic size={20} />
+                  </button>
+                )}
               </form>
             </>
           )}
         </div>
       </div>
-
-      <aside className="web-chat-aside">
-        <div className="premium-panel aside-panel">
-          {summary && (
-            <>
-              <div className="aside-balance-chip">
-                <span className="aside-balance-label">Tienes disponible</span>
-                <AnimatedCurrency value={summary.totales.tienes} className="aside-balance-value" />
-              </div>
-              {summary.totales.debes > 0 && (
-                <div className="aside-balance-chip debt">
-                  <span className="aside-balance-label">Debes en tarjetas</span>
-                  <AnimatedCurrency value={summary.totales.debes} className="aside-balance-value" />
-                </div>
-              )}
-            </>
-          )}
-          <div className="panel-header" style={{ marginBottom: 14 }}>
-            <h2>Pregúntale a Aura</h2>
-          </div>
-          <div className="aside-actions">
-            {SUGGESTIONS.map((s) => (
-              <button key={s} className="quick-action-btn" onClick={() => sendText(s)} disabled={busy || recording}>
-                {s}
-              </button>
-            ))}
-          </div>
-          <div className="aside-tips">
-            <p className="aside-tips-title">💡 Así le puedes hablar</p>
-            <ul>
-              <li>"Almuerzo 18 mil y bus 3 mil"</li>
-              <li>"Ayer pagué 45 mil de gasolina con la tarjeta"</li>
-              <li>"Tengo 350 mil en Nequi"</li>
-              <li>"Pagué 500 mil de la tarjeta desde Bancolombia"</li>
-              <li>"Ponme 600 mil de presupuesto para comida"</li>
-            </ul>
-          </div>
-        </div>
-      </aside>
     </div>
   );
 }
