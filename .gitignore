@@ -1,28 +1,11 @@
-backend/venv/
-backend/__pycache__/
-backend/.env
-backend/finanzas.db
-*.sqlite3
-*.db
-CUENTAS PERSONALES.xlsx
-
-frontend/node_modules/
-frontend/dist/
-frontend/dist-ssr/
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 *.local
-
-# OS generated files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-node_modules
-.next/
-.env.local
-pnpm-lock.yaml
-
-.vercel
 .claude/
+CUENTAS PERSONALES.xlsx

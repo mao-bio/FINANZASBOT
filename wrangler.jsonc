@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "finanzasbot",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  // La app React se sirve como archivos estáticos; /api/* lo atiende el Worker.
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // Workers AI: entiende tus mensajes, notas de voz y fotos de recibos.
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  // Base de datos D1. Wrangler la crea sola en el primer deploy (no hace falta database_id).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "finanzasbot"
+    }
+  ],
+  "vars": {
+    "APP_USERNAME": "Mario",
+    "AI_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct"
+  },
+  // APP_PASSWORD es un secreto: se configura en el panel (Settings → Variables and Secrets),
+  // nunca en este archivo.
+  "observability": {
+    "enabled": true
+  }
+}
