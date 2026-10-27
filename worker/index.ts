@@ -1,0 +1,257 @@
+import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import type { Fuente, MensajeHistorial, RespuestaChat } from '../shared/types';
+import type { Env } from './env';
+import { ensureSchema } from './schema';
+import {
+  SESSION_COOKIE,
+  SESSION_MAX_AGE,
+  checkCredentials,
+  clearFailures,
+  createSession,
+  expectedUser,
+  isLockedOut,
+  recordFailure,
+  verifySession,
+} from './auth';
+import {
+  type Accion,
+  UserError,
+  applyActions,
+  createAccount,
+  deleteBudget,
+  deleteTransaction,
+  getSummary,
+  listAccounts,
+  listTransactions,
+  removeAccount,
+  resetAll,
+  setAccountBalance,
+  setBudget,
+  updateAccount,
+} from './finance';
+import {
+  AiUnavailableError,
+  buildContext,
+  coachReply,
+  extractActions,
+  fallbackReply,
+  readReceipt,
+  transcribe,
+} from './ai';
+import { inferKind, isKind } from './accounts';
+import { bogotaDay } from './dates';
+import { fmtCOP } from '../shared/format';
+
+type AppEnv = { Bindings: Env; Variables: { user: string } };
+
+export const app = new Hono<AppEnv>();
+
+const PUBLIC_PATHS = new Set(['/api/login', '/api/session', '/api/logout']);
+const MAX_MEDIA_CHARS = 6 * 1024 * 1024;
+
+app.onError((err, c) => {
+  if (err instanceof UserError) return c.json({ error: err.message }, 400);
+  if (err instanceof AiUnavailableError) {
+    return c.json(
+      { error: 'La IA de Cloudflare no respondió (puede que se haya acabado la cuota gratis de hoy). Intenta otra vez en un rato.' },
+      503,
+    );
+  }
+  console.error('Error no controlado:', err);
+  return c.json({ error: 'Algo salió mal en el servidor. Intenta de nuevo.' }, 500);
+});
+
+app.use('/api/*', async (c, next) => {
+  // Freno CSRF: las peticiones que cambian datos deben venir de esta misma app.
+  if (c.req.method !== 'GET') {
+    const origin = c.req.header('Origin');
+    if (origin && new URL(origin).host !== new URL(c.req.url).host) {
+      return c.json({ error: 'Origen no permitido.' }, 403);
+    }
+  }
+  await ensureSchema(c.env.DB);
+  if (PUBLIC_PATHS.has(c.req.path)) return next();
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  if (!user) return c.json({ error: 'Tu sesión expiró. Vuelve a entrar.' }, 401);
+  c.set('user', user);
+  return next();
+});
+
+// ─── Sesión ───────────────────────────────────────────────────────────────────
+
+app.post('/api/login', async (c) => {
+  if (!c.env.APP_PASSWORD) {
+    return c.json({ error: 'Falta configurar APP_PASSWORD en Cloudflare (Settings → Variables and Secrets).' }, 500);
+  }
+  const ip = c.req.header('CF-Connecting-IP') ?? 'local';
+  if (await isLockedOut(c.env.DB, ip)) {
+    return c.json({ error: 'Demasiados intentos fallidos. Espera 15 minutos y vuelve a intentar.' }, 429);
+  }
+  const body = await c.req.json<{ username?: string; password?: string }>().catch(() => ({}) as Record<string, never>);
+  const username = String(body.username ?? '');
+  const password = String(body.password ?? '');
+  if (!username || !password) return c.json({ error: 'Escribe tu usuario y tu contraseña.' }, 400);
+
+  if (!(await checkCredentials(c.env, username, password))) {
+    await recordFailure(c.env.DB, ip);
+    return c.json({ error: 'Usuario o contraseña incorrectos. Intenta de nuevo, parce.' }, 401);
+  }
+  await clearFailures(c.env.DB, ip);
+  const user = expectedUser(c.env);
+  setCookie(c, SESSION_COOKIE, await createSession(c.env, user), {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+    path: '/',
+    maxAge: SESSION_MAX_AGE,
+  });
+  return c.json({ user });
+});
+
+app.get('/api/session', async (c) => {
+  const user = await verifySession(c.env, getCookie(c, SESSION_COOKIE));
+  if (!user) return c.json({ error: 'Sin sesión' }, 401);
+  return c.json({ user });
+});
+
+app.post('/api/logout', (c) => {
+  deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
+  return c.json({ ok: true });
+});
+
+// ─── Datos ────────────────────────────────────────────────────────────────────
+
+app.get('/api/summary', async (c) => c.json(await getSummary(c.env.DB)));
+
+app.get('/api/transactions', async (c) => {
+  const limit = Number(c.req.query('limit') ?? 2000);
+  return c.json(await listTransactions(c.env.DB, Number.isFinite(limit) ? limit : 2000));
+});
+
+app.delete('/api/transactions/:id', async (c) => {
+  const deleted = await deleteTransaction(c.env.DB, Number(c.req.param('id')));
+  if (!deleted) return c.json({ error: 'Ese movimiento ya no existe.' }, 404);
+  return c.json({ ok: true, summary: await getSummary(c.env.DB) });
+});
+
+app.post('/api/accounts', async (c) => {
+  const body = await c.req.json<{ nombre?: string; tipo?: string; saldo?: number }>();
+  const nombre = String(body.nombre ?? '');
+  const tipo = isKind(body.tipo) ? body.tipo : inferKind(nombre);
+  const { cuenta, creada } = await createAccount(c.env.DB, nombre, tipo);
+  if (!creada) throw new UserError(`Ya tienes una cuenta llamada ${cuenta.nombre}.`);
+  const saldo = Math.round(Math.abs(Number(body.saldo ?? 0)));
+  if (Number.isFinite(saldo) && saldo > 0) await setAccountBalance(c.env.DB, cuenta, saldo, 'chat');
+  return c.json({ ok: true, summary: await getSummary(c.env.DB) });
+});
+
+app.patch('/api/accounts/:id', async (c) => {
+  const body = await c.req.json<{ nombre?: string; tipo?: string; principal?: boolean; saldo?: number }>();
+  const cuenta = await updateAccount(c.env.DB, Number(c.req.param('id')), body);
+  if (body.saldo !== undefined) {
+    const saldo = Math.round(Math.abs(Number(body.saldo)));
+    if (!Number.isFinite(saldo)) throw new UserError('El saldo no es válido.');
+    await setAccountBalance(c.env.DB, cuenta, saldo, 'chat');
+  }
+  return c.json({ ok: true, summary: await getSummary(c.env.DB) });
+});
+
+app.delete('/api/accounts/:id', async (c) => {
+  const resultado = await removeAccount(c.env.DB, Number(c.req.param('id')));
+  return c.json({ ok: true, resultado, summary: await getSummary(c.env.DB) });
+});
+
+app.put('/api/budgets', async (c) => {
+  const body = await c.req.json<{ categoria?: string; monto?: number }>();
+  await setBudget(c.env.DB, String(body.categoria ?? ''), Number(body.monto));
+  return c.json({ ok: true, summary: await getSummary(c.env.DB) });
+});
+
+app.delete('/api/budgets/:categoria', async (c) => {
+  await deleteBudget(c.env.DB, c.req.param('categoria'));
+  return c.json({ ok: true, summary: await getSummary(c.env.DB) });
+});
+
+app.post('/api/reset', async (c) => {
+  await resetAll(c.env.DB);
+  return c.json({ ok: true, summary: await getSummary(c.env.DB) });
+});
+
+// ─── Chat con Aura (texto, voz o foto) ────────────────────────────────────────
+
+function stripDataUrl(value: string): string {
+  const comma = value.indexOf(',');
+  return value.startsWith('data:') && comma > 0 ? value.slice(comma + 1) : value;
+}
+
+app.post('/api/chat', bodyLimit({ maxSize: 14 * 1024 * 1024 }), async (c) => {
+  const body = await c.req.json<{ message?: string; audio?: string; image?: string; history?: MensajeHistorial[] }>();
+  const db = c.env.DB;
+  let message = String(body.message ?? '').trim().slice(0, 1000);
+  const history = Array.isArray(body.history) ? body.history : [];
+  const cuentas = await listAccounts(db);
+
+  let fuente: Fuente = 'chat';
+  let transcript: string | undefined;
+  let acciones: Accion[] = [];
+  let coachMessage = message;
+
+  if (typeof body.audio === 'string' && body.audio) {
+    if (body.audio.length > MAX_MEDIA_CHARS) throw new UserError('La nota de voz es muy larga. Intenta con menos de un minuto.');
+    transcript = await transcribe(c.env, stripDataUrl(body.audio));
+    if (!transcript) throw new UserError('No alcancé a escuchar nada en la nota de voz. ¿Me la repites?');
+    message = transcript;
+    coachMessage = transcript;
+    fuente = 'voz';
+  }
+
+  if (typeof body.image === 'string' && body.image) {
+    if (!/^data:image\/(jpeg|png|webp);base64,/.test(body.image)) throw new UserError('Esa imagen no es válida.');
+    if (body.image.length > MAX_MEDIA_CHARS) throw new UserError('La foto es muy pesada. Intenta con otra.');
+    fuente = 'foto';
+    const accion = await readReceipt(c.env, body.image, message, cuentas);
+    coachMessage = `Te mandé la foto de un recibo${message ? ` y te dije: "${message}"` : ''}.`;
+    if (accion) {
+      acciones = [accion];
+    } else {
+      const summary = await getSummary(db);
+      return c.json<RespuestaChat>({
+        reply: 'Parce, no pude leer el total en esa foto. 😕 Intenta con una foto más cerca y con buena luz, o escríbeme el gasto.',
+        applied: { movimientos: [], cuentasCreadas: [], presupuestos: [], avisos: [] },
+        summary,
+      });
+    }
+  } else if (message) {
+    acciones = await extractActions(c.env, message, cuentas);
+  } else {
+    throw new UserError('Escríbeme algo, mándame una nota de voz o una foto de un recibo.');
+  }
+
+  const applied = await applyActions(db, acciones, fuente);
+  const summary = await getSummary(db);
+  const recent = (await listTransactions(db, 30)).map((m) => ({
+    fecha: bogotaDay(new Date(m.fecha)),
+    tipo: m.tipo,
+    monto: fmtCOP(m.monto),
+    categoria: m.categoria,
+    descripcion: m.descripcion,
+    cuenta: m.cuenta_destino ? `${m.cuenta} → ${m.cuenta_destino}` : m.cuenta,
+  }));
+  const context = await buildContext(db, summary, applied, recent);
+
+  let reply = '';
+  try {
+    reply = await coachReply(c.env, { user: c.get('user'), message: coachMessage, history, context });
+  } catch (err) {
+    console.error('No se pudo redactar la respuesta:', err);
+  }
+  if (!reply) reply = fallbackReply(applied);
+
+  return c.json<RespuestaChat>({ reply, transcript, applied, summary });
+});
+
+app.all('/api/*', (c) => c.json({ error: 'Ruta no encontrada' }, 404));
+
+export default app;

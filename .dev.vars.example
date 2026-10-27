@@ -1,0 +1,3 @@
+# Copia este archivo como .dev.vars para correr la app en tu computador (npm run dev).
+# En Cloudflare, APP_PASSWORD se configura como secreto en el panel, NO aquí.
+APP_PASSWORD=pon-aqui-una-clave-larga

@@ -1,27 +1,36 @@
 {
   "name": "finanzasbot",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "npm run build && vite preview",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "@supabase/supabase-js": "^2.43.4",
-    "lucide-react": "^1.17.0",
-    "next": "14.2.3",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-is": "^19.2.7",
-    "recharts": "^3.8.1"
+    "@fontsource/plus-jakarta-sans": "^5.3.0",
+    "hono": "^4.13.14",
+    "lucide-react": "^1.61.0",
+    "react": "^19.1.10",
+    "react-dom": "^19.1.10",
+    "react-is": "^19.1.10",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "typescript": "^5.4.5"
+    "@cloudflare/vite-plugin": "^1.65.0",
+    "@cloudflare/vitest-plugin": "^1.4.8",
+    "@cloudflare/workers-types": "^5.20261027.1",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "~4.1.12",
+    "wrangler": "^4.153.0"
   }
 }
