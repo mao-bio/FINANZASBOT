@@ -20,8 +20,12 @@ Se instala en el celular como una app más (sin tienda de apps).
 | 🎤 **Notas de voz** | Grabas el gasto y Whisper (en Workers AI) lo transcribe. |
 | 🖼️ **Analiza imágenes** | Tomas una foto o subes desde la galería (hasta 5 a la vez) facturas, recibos, comprobantes de Nequi/Bancolombia, pantallazos del banco o extractos. La IA reconoce qué es, lee comercio, fecha, total, productos y cada movimiento, y te los muestra para revisar, corregir y guardar. Avisa si alguno parece repetido. |
 | 🏦 **Varias cuentas** | Efectivo, bancos, Nequi/Daviplata, tarjetas de crédito y ahorros, cada una con su saldo. Transferencias entre cuentas, pagos de tarjeta y ajustes de saldo. |
-| 🎯 **Presupuestos** | Topes mensuales por categoría con avisos claros: *vas bien*, *ojo*, *te pasaste*. |
-| 📊 **Resumen** | Cuánto te entró, cuánto gastaste y en qué, más la evolución de los últimos 6 meses. |
+| 🎯 **Presupuestos y alertas** | Topes mensuales por categoría con avisos claros: *vas bien*, *ojo*, *te pasaste*. Cuando un gasto te lleva al 80% o te pasa del tope, sale una alerta en la app y, si la activas en tu perfil, una notificación en el celular. |
+| 🏁 **Metas de ahorro** | Le pones nombre, valor y fecha (o se la cuentas a Aura) y te dice cuánto apartar **por día, por semana y por mes**, cuánto te falta y si llegas a tiempo con lo que normalmente te sobra. Si este mes vas gastando más de lo normal, te muestra cómo cambia el plan. Puedes vincularla a una cuenta de ahorros o ir abonando a mano. |
+| 🧪 **Simular escenarios** | En cada meta: ¿y si mis gastos suben 20%?, ¿y si ahorro 100 mil extra?, ¿y si muevo la fecha 3 meses? Ves el plan de hoy contra el escenario lado a lado. |
+| 🤔 **Simular decisiones** | Comprar una moto, tomar un crédito, mudarte o cambiar de empleo: cuota (sistema francés), intereses, cuánto pagas de una, cómo queda tu ahorro mensual, colchón y un veredicto (*viable*, *ajustado*, *riesgoso*) con sus razones y el efecto en tus metas. Guarda escenarios y compara hasta 3. |
+| 🔎 **Hallazgos** | Gastos hormiga, suscripciones y cobros fijos que se repiten, categorías donde vas gastando más de lo habitual a esta altura del mes, gastos inusuales (mucho más grandes de lo normal) y límites de gasto sugeridos que activas con un toque. |
+| 📊 **Análisis** | Resumen del mes, evolución de los últimos 6 meses y **comparación de dos meses** lado a lado por categoría. |
 | ↩️ **Deshacer** | Cada movimiento que registra la IA trae un botón para deshacerlo si entendió mal. |
 | 📱 **App instalable (PWA)** | Desde el navegador del celular: "Agregar a pantalla de inicio". Diseño fintech claro con modo oscuro automático. |
 | 🔒 **Privada** | Solo tú entras (usuario + contraseña, sesión firmada, freno a intentos fallidos). |
@@ -38,18 +42,19 @@ pagué 500 mil de la tarjeta desde Bancolombia
 tengo 350 mil en efectivo            ← fija el saldo real de una cuenta
 debo 1.2 millones en la Visa         ← crea/ajusta una tarjeta de crédito
 ponme 600 mil de presupuesto para comida
+quiero ahorrar 3 millones para un viaje en diciembre   ← crea una meta
 ¿cuánto tengo?  ·  ¿cómo voy este mes?  ·  ¿en qué gasto más?
 ```
 
 Si mencionas una cuenta que no existe, Aura la crea sola. Si no dices con qué pagaste, usa tu **cuenta principal**
-(la cambias en la pestaña *Cuentas*).
+(la cambias en *Cuentas*: desde Inicio, toca *Ver todas*).
 
 ---
 
 ## 🏗️ Cómo está hecho
 
 ```
-Celular (PWA React)  ──►  Cloudflare Worker (Hono)  ──►  D1 (SQLite): cuentas, movimientos, presupuestos
+Celular (PWA React)  ──►  Cloudflare Worker (Hono)  ──►  D1 (SQLite): cuentas, movimientos, presupuestos, metas, escenarios
                                │
                                └──►  Workers AI
                                       • Llama 4 Scout: entiende mensajes, analiza imágenes y redacta las respuestas
@@ -59,13 +64,15 @@ Celular (PWA React)  ──►  Cloudflare Worker (Hono)  ──►  D1 (SQLite)
 - Un solo **Worker** sirve la app (archivos estáticos) y la API en `/api/*`.
 - La IA **no hace cuentas**: extrae lo que dijiste en JSON, el Worker lo guarda en D1 y calcula los saldos, y Aura
   solo redacta la respuesta con cifras que ya vienen calculadas.
+- Metas, simulaciones y hallazgos también son **cálculos exactos sin IA** (`shared/plan.ts`, `shared/simulador.ts`,
+  `worker/insights.ts`). La app y Aura usan las mismas fórmulas, así que dicen las mismas cifras.
 - El Worker crea sus propias tablas en D1 la primera vez que arranca (no hay que correr migraciones).
 
 | Carpeta | Qué hay |
 | :--- | :--- |
-| `worker/` | API: sesión (`auth.ts`), finanzas y saldos (`finance.ts`), IA (`ai.ts`), tablas (`schema.ts`) |
-| `src/` | App React: inicio, chat con Aura, cuentas, resumen, movimientos |
-| `shared/` | Tipos y formato de pesos compartidos |
+| `worker/` | API: sesión (`auth.ts`), finanzas, saldos y alertas (`finance.ts`), metas (`goals.ts`), escenarios (`scenarios.ts`), hallazgos (`insights.ts`), IA (`ai.ts`), tablas (`schema.ts`) |
+| `src/` | App React: inicio, análisis, chat con Aura, metas y simulador, movimientos, cuentas |
+| `shared/` | Tipos, formato de pesos, plan de metas (`plan.ts`) y simulador de decisiones (`simulador.ts`) |
 | `public/` | Manifiesto de la app, service worker e íconos |
 | `test/` | Pruebas del Worker (con una IA simulada) |
 

@@ -1,5 +1,7 @@
 // Tipos compartidos entre el Worker (API) y la app React.
 
+import type { Base, ParamsEscenario } from './simulador';
+
 export type TipoCuenta = 'efectivo' | 'banco' | 'billetera' | 'credito' | 'ahorro';
 export type TipoMovimiento = 'ingreso' | 'gasto' | 'transferencia' | 'ajuste';
 export type Fuente = 'chat' | 'voz' | 'foto';
@@ -52,13 +54,25 @@ export interface Resumen {
   grupos: string[];
   /** Catálogo completo de categorías */
   categorias: { gasto: string[]; ingreso: string[] };
+  /** Presupuestos que ya van en 80% o más */
+  alertas: Alerta[];
+}
+
+export interface Alerta {
+  nivel: 'warning' | 'critical';
+  categoria: string;
+  titulo: string;
+  mensaje: string;
 }
 
 export interface ResultadoAcciones {
   movimientos: Movimiento[];
   cuentasCreadas: string[];
   presupuestos: { categoria: string; monto: number }[];
+  metas: { nombre: string; monto: number; fecha: string }[];
   avisos: string[];
+  /** Presupuestos que estos movimientos acaban de llevar al 80% o al 100% */
+  alertas: Alerta[];
 }
 
 export interface RespuestaChat {
@@ -113,4 +127,43 @@ export interface AccionGuardar {
   cuenta_destino: string;
   tipo_cuenta: string;
   fecha: string;
+}
+
+// ─── Metas, simulador y hallazgos ─────────────────────────────────────────────
+
+export interface Meta {
+  id: number;
+  nombre: string;
+  monto: number;
+  /** 'YYYY-MM-DD' */
+  fecha: string;
+  /** Si está vinculada, lo ahorrado es el saldo de esa cuenta */
+  cuentaId: number | null;
+  cuenta: string | null;
+  ahorrado: number;
+  creada: string;
+}
+
+export interface Escenario {
+  id: number;
+  nombre: string;
+  escenario: ParamsEscenario;
+  creado: string;
+}
+
+export interface Hallazgos {
+  /** Tu situación promedio, base para metas y simulaciones */
+  base: Base & { capacidadMensual: number };
+  /** Gastos pequeños y frecuentes de los últimos 30 días */
+  hormiga: { nombre: string; categoria: string; veces: number; total: number; anual: number }[];
+  /** Cobros que se repiten cada mes */
+  recurrentes: { nombre: string; categoria: string; monto: number; meses: number; ultimo: string; anual: number; suscripcion: boolean }[];
+  /** Categorías donde vas gastando más que en meses anteriores a esta misma altura del mes */
+  porEncima: { grupo: string; actual: number; habitual: number; diferencia: number; pct: number | null }[];
+  /** Gastos mucho más grandes de lo normal en su categoría */
+  inusuales: { descripcion: string; categoria: string; monto: number; fecha: string; normal: number; veces: number }[];
+  /** Topes mensuales sugeridos a partir de lo que gastas */
+  limites: { grupo: string; promedio: number; sugerido: number; actual: number | null }[];
+  /** Últimos 6 meses, para comparar */
+  meses: { mes: string; ingresos: number; gastos: number; porGrupo: Record<string, number> }[];
 }

@@ -1,6 +1,9 @@
 import type {
   AccionGuardar,
   AnalisisImagen,
+  Escenario,
+  Hallazgos,
+  Meta,
   MensajeHistorial,
   Movimiento,
   ResultadoAcciones,
@@ -53,4 +56,14 @@ export const api = {
   analyzeImage: (image: string, note: string) => request<AnalisisImagen>('/api/images/analyze', json('POST', { image, note })),
   applyMovements: (acciones: AccionGuardar[]) =>
     request<{ applied: ResultadoAcciones; summary: Resumen }>('/api/movements/apply', json('POST', { acciones })),
+  insights: () => request<Hallazgos>('/api/insights'),
+  goals: () => request<Meta[]>('/api/goals'),
+  createGoal: (body: { nombre: string; monto: number; fecha: string; cuentaId: number | null; ahorrado?: number }) =>
+    request<Meta[]>('/api/goals', json('POST', body)),
+  updateGoal: (id: number, body: { nombre?: string; monto?: number; fecha?: string; cuentaId?: number | null; ahorrado?: number; abono?: number }) =>
+    request<Meta[]>(`/api/goals/${id}`, json('PATCH', body)),
+  deleteGoal: (id: number) => request<Meta[]>(`/api/goals/${id}`, json('DELETE')),
+  scenarios: () => request<Escenario[]>('/api/scenarios'),
+  saveScenario: (nombre: string, escenario: Escenario['escenario']) => request<Escenario[]>('/api/scenarios', json('POST', { nombre, escenario })),
+  deleteScenario: (id: number) => request<Escenario[]>(`/api/scenarios/${id}`, json('DELETE')),
 };

@@ -99,3 +99,15 @@ export function formatMoneyInput(text: string): string {
   const n = parseMoney(text);
   return Number.isFinite(n) ? n.toLocaleString('es-CO') : '';
 }
+
+/** 'YYYY-MM-DD' → "15 de marzo de 2027" */
+export function longDay(key: string): string {
+  return new Date(`${key}T12:00:00Z`).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** 'YYYY-MM-DD' → "15 mar 2027" */
+export function shortDay(key: string): string {
+  return new Date(`${key}T12:00:00Z`).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+    .replace(/\./g, '')
+    .replace(/ de /g, ' ');
+}

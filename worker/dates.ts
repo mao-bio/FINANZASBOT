@@ -48,3 +48,10 @@ export function resolveTxDate(fecha: string | null | undefined, now = new Date()
   if (now.getTime() - noon.getTime() > 400 * DAY_MS) return now.toISOString();
   return noon.toISOString();
 }
+
+/** ¿Es una fecha real con formato 'YYYY-MM-DD'? */
+export function isValidDay(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}

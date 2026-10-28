@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { AnalisisImagen, Movimiento, Resumen, RespuestaChat } from '../shared/types';
+import type { AnalisisImagen, Escenario, Hallazgos, Meta, Movimiento, Resumen, RespuestaChat } from '../shared/types';
 import { api, fakeAI, gasto, login, resetDb, scriptedAI } from './helpers';
 
 let cookie: string;
@@ -379,5 +379,116 @@ describe('imágenes', () => {
       }),
     });
     expect(res.status).toBe(503);
+  });
+});
+
+describe('metas, alertas y simulador', () => {
+  const enDias = (n: number) => new Date(Date.now() - 5 * 3_600_000 + n * 86_400_000).toISOString().slice(0, 10);
+
+  it('crea, abona, vincula y borra metas', async () => {
+    let res = await api('/api/goals', { method: 'POST', cookie, body: { nombre: 'Moto', monto: 9_000_000, fecha: enDias(200) } });
+    expect(res.status).toBe(200);
+    let metas = await res.json<Meta[]>();
+    expect(metas).toEqual([expect.objectContaining({ nombre: 'Moto', monto: 9_000_000, ahorrado: 0, cuentaId: null })]);
+    const id = metas[0].id;
+
+    metas = await (await api(`/api/goals/${id}`, { method: 'PATCH', cookie, body: { abono: 500_000 } })).json<Meta[]>();
+    expect(metas[0].ahorrado).toBe(500_000);
+
+    // Vinculada a una cuenta, lo ahorrado es su saldo
+    await api('/api/accounts', { method: 'POST', cookie, body: { nombre: 'Ahorros', tipo: 'ahorro', saldo: 2_300_000 } });
+    const summary = await (await api('/api/summary', { cookie })).json<Resumen>();
+    const ahorros = summary.cuentas.find((c) => c.nombre === 'Ahorros')!;
+    metas = await (await api(`/api/goals/${id}`, { method: 'PATCH', cookie, body: { cuentaId: ahorros.id } })).json<Meta[]>();
+    expect(metas[0]).toMatchObject({ cuenta: 'Ahorros', ahorrado: 2_300_000 });
+
+    res = await api(`/api/goals/${id}`, { method: 'DELETE', cookie });
+    expect(await res.json()).toEqual([]);
+  });
+
+  it('valida las metas', async () => {
+    const bad = [
+      { nombre: '', monto: 1000, fecha: enDias(30) },
+      { nombre: 'X', monto: 0, fecha: enDias(30) },
+      { nombre: 'X', monto: 1000, fecha: enDias(-1) },
+      { nombre: 'X', monto: 1000, fecha: '2027-02-30' },
+      { nombre: 'X', monto: 1000, fecha: enDias(30), cuentaId: 999 },
+    ];
+    for (const body of bad) {
+      expect((await api('/api/goals', { method: 'POST', cookie, body })).status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it('Aura crea metas desde el chat', async () => {
+    const fecha = enDias(90);
+    const out = await chat(
+      { message: 'quiero ahorrar 3 millones para un viaje' },
+      scriptedAI({ acciones: [{ accion: 'meta', monto: 3_000_000, descripcion: 'Viaje', fecha }] }),
+    );
+    expect(out.applied.metas).toEqual([{ nombre: 'Viaje', monto: 3_000_000, fecha }]);
+    const metas = await (await api('/api/goals', { cookie })).json<Meta[]>();
+    expect(metas[0]).toMatchObject({ nombre: 'Viaje', monto: 3_000_000, fecha });
+    // Sin fecha queda a 6 meses
+    const sinFecha = await chat({ message: 'meta de 1 millón' }, scriptedAI({ acciones: [{ accion: 'meta', monto: 1_000_000, descripcion: 'Colchón' }] }));
+    expect(sinFecha.applied.metas[0].fecha > enDias(170)).toBe(true);
+  });
+
+  it('le pasa a Aura las metas con cuánto ahorrar', async () => {
+    await api('/api/goals', { method: 'POST', cookie, body: { nombre: 'Moto', monto: 9_000_000, fecha: enDias(300) } });
+    const calls: { model: string; inputs: Record<string, unknown> }[] = [];
+    await chat({ message: '¿cuánto me falta para la moto?' }, scriptedAI({ acciones: [], calls }));
+    const system = (calls.find((c) => !c.inputs.response_format)!.inputs.messages as { content: string }[])[0].content;
+    expect(system).toContain('"nombre":"Moto"');
+    expect(system).toContain('ahorrar_por_semana');
+  });
+
+  it('avisa al acercarse y al pasarse del presupuesto', async () => {
+    await api('/api/budgets', { method: 'PUT', cookie, body: { categoria: 'Comida', monto: 100_000 } });
+    let out = await chat({ message: 'mercado 70 mil' }, scriptedAI({ acciones: [gasto(70_000)] }));
+    expect(out.applied.alertas).toEqual([]);
+
+    out = await chat({ message: 'almuerzo 15 mil' }, scriptedAI({ acciones: [gasto(15_000, { categoria: 'Comida - Restaurantes' })] }));
+    expect(out.applied.alertas).toEqual([expect.objectContaining({ nivel: 'warning', categoria: 'Comida', titulo: 'Ya usaste el 85% de Comida' })]);
+
+    out = await chat({ message: 'otro almuerzo' }, scriptedAI({ acciones: [gasto(5_000, { categoria: 'Comida - Restaurantes' })] }));
+    expect(out.applied.alertas).toEqual([]);
+
+    out = await chat({ message: 'domicilio 30 mil' }, scriptedAI({ acciones: [gasto(30_000, { categoria: 'Comida - Domicilios' })] }));
+    expect(out.applied.alertas).toEqual([expect.objectContaining({ nivel: 'critical', titulo: 'Te pasaste del presupuesto de Comida' })]);
+    expect(out.summary.alertas).toEqual([expect.objectContaining({ nivel: 'critical', categoria: 'Comida' })]);
+    expect(out.reply).toBeTruthy();
+  });
+
+  it('entrega hallazgos y base para simular', async () => {
+    await chat({ message: 'tengo 2 millones en el banco' }, scriptedAI({ acciones: [{ accion: 'saldo', monto: 2_000_000, cuenta: 'Banco', tipo_cuenta: 'banco' }] }));
+    const h = await (await api('/api/insights', { cookie })).json<Hallazgos>();
+    expect(h.base.disponible).toBe(2_000_000);
+    expect(h.meses).toHaveLength(6);
+    expect(h).toMatchObject({ hormiga: [], recurrentes: [], inusuales: [] });
+  });
+
+  it('guarda, lista y borra escenarios', async () => {
+    let res = await api('/api/scenarios', {
+      method: 'POST',
+      cookie,
+      body: { nombre: 'Moto AKT', escenario: { tipo: 'moto', params: { precio: 8_000_000, cuotaInicial: 1_000_000, financiada: true, tasaMensual: 2.1, plazoMeses: 24, gastosMensuales: 200_000, ahorroTransporte: 150_000, extra: 'x' } } },
+    });
+    let list = await res.json<Escenario[]>();
+    expect(list[0]).toMatchObject({ nombre: 'Moto AKT', escenario: { tipo: 'moto', params: { precio: 8_000_000, financiada: true, tasaMensual: 2.1 } } });
+    expect('extra' in list[0].escenario.params).toBe(false);
+
+    res = await api('/api/scenarios', { method: 'POST', cookie, body: { nombre: 'Raro', escenario: { tipo: 'casino', params: {} } } });
+    expect(res.status).toBe(400);
+
+    list = await (await api(`/api/scenarios/${list[0].id}`, { method: 'DELETE', cookie })).json<Escenario[]>();
+    expect(list).toEqual([]);
+  });
+
+  it('reiniciar borra también metas y escenarios', async () => {
+    await api('/api/goals', { method: 'POST', cookie, body: { nombre: 'Moto', monto: 1_000_000, fecha: enDias(30) } });
+    await api('/api/scenarios', { method: 'POST', cookie, body: { nombre: 'C', escenario: { tipo: 'credito', params: { monto: 1, tasaMensual: 1, plazoMeses: 1 } } } });
+    await api('/api/reset', { method: 'POST', cookie });
+    expect(await (await api('/api/goals', { cookie })).json()).toEqual([]);
+    expect(await (await api('/api/scenarios', { cookie })).json()).toEqual([]);
   });
 });

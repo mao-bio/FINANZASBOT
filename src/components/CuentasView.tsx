@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { ChevronRight, MessageCircle, Plus, Star, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageCircle, Plus, Star, Trash2 } from 'lucide-react';
 import type { Cuenta, Resumen, TipoCuenta } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
 import { api } from '../lib/api';
@@ -10,14 +10,19 @@ import { ConfirmDialog, MoneyInput, Sheet } from './Dialogs';
 
 type Run = <T>(fn: () => Promise<T>) => Promise<T | undefined>;
 
-export default function CuentasView(props: { summary: Resumen; onEdit: (c: Cuenta | 'new') => void }) {
+export default function CuentasView(props: { summary: Resumen; onEdit: (c: Cuenta | 'new') => void; onBack: () => void }) {
   const { summary, onEdit } = props;
   const { totales } = summary;
 
   return (
     <div className="screen">
       <header className="screen-header">
-        <h1>Cuentas</h1>
+        <div className="title-back">
+          <button className="icon-btn" onClick={props.onBack} aria-label="Volver a Inicio">
+            <ChevronLeft size={24} aria-hidden="true" />
+          </button>
+          <h1>Cuentas</h1>
+        </div>
         <button className="btn btn-primary btn-sm" onClick={() => onEdit('new')}>
           <Plus size={18} aria-hidden="true" /> Agregar
         </button>

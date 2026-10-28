@@ -1,4 +1,5 @@
 import type {
+  Alerta,
   Cuenta,
   Fuente,
   Movimiento,
@@ -22,8 +23,9 @@ import {
   normalizeCategory,
   normalizeGroup,
 } from './categories';
-import { bogotaDay, bogotaMonth, monthRange, resolveTxDate, shiftMonth } from './dates';
+import { bogotaDay, bogotaMonth, isValidDay, monthRange, resolveTxDate, shiftMonth } from './dates';
 import { seedDefaults } from './schema';
+import { sumarMeses } from '../shared/plan';
 
 /** Error con mensaje apto para mostrarle al usuario (HTTP 400). */
 export class UserError extends Error {}
@@ -325,6 +327,11 @@ export async function getSummary(db: D1Database, now = new Date()): Promise<Resu
     gastado: porCategoria.find((p) => p.grupo === b.category)?.monto ?? 0,
   }));
 
+  const alertas = presupuestos
+    .map((p) => budgetAlert(p.categoria, p.monto, p.gastado))
+    .filter((a): a is Alerta => a !== null)
+    .sort((a, b) => (a.nivel === b.nivel ? 0 : a.nivel === 'critical' ? -1 : 1));
+
   const tienes = cuentas.filter((c) => c.tipo !== 'credito').reduce((s, c) => s + c.saldo, 0);
   const debes = cuentas.filter((c) => c.tipo === 'credito').reduce((s, c) => s + Math.max(0, -c.saldo), 0);
   const neto = cuentas.reduce((s, c) => s + c.saldo, 0);
@@ -336,11 +343,14 @@ export async function getSummary(db: D1Database, now = new Date()): Promise<Resu
     historico,
     grupos: EXPENSE_GROUPS,
     categorias: { gasto: [...EXPENSE_CATEGORIES], ingreso: [...INCOME_CATEGORIES] },
+    alertas,
   };
 }
 
 export async function resetAll(db: D1Database): Promise<void> {
   await db.batch([
+    db.prepare(`DELETE FROM goals`),
+    db.prepare(`DELETE FROM scenarios`),
     db.prepare(`DELETE FROM transactions`),
     db.prepare(`DELETE FROM budgets`),
     db.prepare(`DELETE FROM accounts`),
@@ -349,10 +359,52 @@ export async function resetAll(db: D1Database): Promise<void> {
   await seedDefaults(db);
 }
 
+// ─── Alertas de presupuesto ───────────────────────────────────────────────────
+
+/** 0: bien · 1: 80% o más · 2: llegó o pasó el tope */
+function nivelPresupuesto({ monto, gastado }: { monto: number; gastado: number }): number {
+  if (monto <= 0) return 0;
+  return gastado >= monto ? 2 : gastado >= monto * 0.8 ? 1 : 0;
+}
+
+export function budgetAlert(categoria: string, monto: number, gastado: number): Alerta | null {
+  const nivel = nivelPresupuesto({ monto, gastado });
+  if (nivel === 2) {
+    return {
+      nivel: 'critical',
+      categoria,
+      titulo: gastado > monto ? `Te pasaste del presupuesto de ${categoria}` : `Llegaste al tope de ${categoria}`,
+      mensaje:
+        gastado > monto
+          ? `Llevas ${fmtCOP(gastado)} de ${fmtCOP(monto)} este mes: ${fmtCOP(gastado - monto)} por encima.`
+          : `Ya gastaste los ${fmtCOP(monto)} que te pusiste para este mes.`,
+    };
+  }
+  if (nivel === 1) {
+    return {
+      nivel: 'warning',
+      categoria,
+      titulo: `Ya usaste el ${Math.floor((gastado / monto) * 100)}% de ${categoria}`,
+      mensaje: `Te quedan ${fmtCOP(monto - gastado)} de ${fmtCOP(monto)} para el resto del mes.`,
+    };
+  }
+  return null;
+}
+
+async function budgetUsage(db: D1Database, now: Date): Promise<Map<string, { monto: number; gastado: number }>> {
+  const [porGrupo, budgets] = await Promise.all([
+    spendByGroup(db, bogotaMonth(now)),
+    db.prepare(`SELECT category, amount FROM budgets`).all<{ category: string; amount: number }>(),
+  ]);
+  return new Map(
+    budgets.results.map((b) => [b.category, { monto: Number(b.amount), gastado: porGrupo.find((p) => p.grupo === b.category)?.monto ?? 0 }]),
+  );
+}
+
 // ─── Acciones que entiende la IA ──────────────────────────────────────────────
 
 export interface Accion {
-  accion: 'gasto' | 'ingreso' | 'transferencia' | 'saldo' | 'presupuesto';
+  accion: 'gasto' | 'ingreso' | 'transferencia' | 'saldo' | 'presupuesto' | 'meta';
   monto: number;
   categoria?: string;
   descripcion?: string;
@@ -417,7 +469,7 @@ export async function previewActions(db: D1Database, acciones: Accion[], now = n
   const propuestas: Propuesta[] = [];
   for (const a of acciones) {
     const monto = Math.round(Number(a.monto));
-    if (a.accion === 'presupuesto' || !Number.isFinite(monto) || monto < 0 || monto > MAX_AMOUNT) continue;
+    if (a.accion === 'presupuesto' || a.accion === 'meta' || !Number.isFinite(monto) || monto < 0 || monto > MAX_AMOUNT) continue;
     if (monto === 0 && a.accion !== 'saldo') continue;
     if (a.accion === 'transferencia' && !cleanText(a.cuenta_destino)) continue;
     const hint = isKind(a.tipo_cuenta) ? a.tipo_cuenta : null;
@@ -465,7 +517,8 @@ export async function applyActions(
   now = new Date(),
   limit = 8,
 ): Promise<ResultadoAcciones> {
-  const result: ResultadoAcciones = { movimientos: [], cuentasCreadas: [], presupuestos: [], avisos: [] };
+  const result: ResultadoAcciones = { movimientos: [], cuentasCreadas: [], presupuestos: [], metas: [], avisos: [], alertas: [] };
+  const antes = acciones.some((a) => a.accion === 'gasto') ? await budgetUsage(db, now) : null;
   const resolver = new AccountResolver(db, await listAccounts(db), result);
 
   for (const a of acciones.slice(0, limit)) {
@@ -535,8 +588,28 @@ export async function applyActions(
         }
         break;
       }
+      case 'meta': {
+        const hoy = bogotaDay(now);
+        const nombre = cleanText(a.descripcion, 40) || 'Mi meta';
+        // Sin fecha (o con una que ya pasó), la meta queda a 6 meses.
+        const fecha = isValidDay(a.fecha) && a.fecha > hoy ? a.fecha : sumarMeses(hoy, 6);
+        await db.prepare(`INSERT INTO goals (name, target, target_date) VALUES (?, ?, ?)`).bind(nombre, monto, fecha).run();
+        result.metas.push({ nombre, monto, fecha });
+        break;
+      }
       default:
         break;
+    }
+  }
+
+  if (antes) {
+    const despues = await budgetUsage(db, now);
+    for (const [categoria, uso] of despues) {
+      const previo = antes.get(categoria);
+      if (nivelPresupuesto(uso) > (previo ? nivelPresupuesto(previo) : 0)) {
+        const alerta = budgetAlert(categoria, uso.monto, uso.gastado);
+        if (alerta) result.alertas.push(alerta);
+      }
     }
   }
   return result;
