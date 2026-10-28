@@ -20,7 +20,8 @@ Se instala en el celular como una app más (sin tienda de apps).
 | 🎤 **Notas de voz** | Grabas el gasto y Whisper (en Workers AI) lo transcribe. |
 | 🖼️ **Analiza imágenes** | Tomas una foto o subes desde la galería (hasta 5 a la vez) facturas, recibos, comprobantes de Nequi/Bancolombia, pantallazos del banco o extractos. La IA reconoce qué es, lee comercio, fecha, total, productos y cada movimiento, y te los muestra para revisar, corregir y guardar. Avisa si alguno parece repetido. |
 | 🏦 **Varias cuentas** | Efectivo, bancos, Nequi/Daviplata, tarjetas de crédito y ahorros, cada una con su saldo. Transferencias entre cuentas, pagos de tarjeta y ajustes de saldo. |
-| 🎯 **Presupuestos y alertas** | Topes mensuales por categoría con avisos claros: *vas bien*, *ojo*, *te pasaste*. Cuando un gasto te lleva al 80% o te pasa del tope, sale una alerta en la app y, si la activas en tu perfil, una notificación en el celular. |
+| 🎯 **Presupuestos y alertas** | Topes mensuales por categoría con avisos claros: *vas bien*, *ojo*, *te pasaste*. Cuando un gasto te lleva al 80% o te pasa del tope, sale una alerta en la app y una notificación en el celular. |
+| 🔔 **Notificaciones push** | Llegan **aunque la app esté cerrada**: alertas de presupuesto apenas registras el gasto y, cada noche a las 7:30 p. m., avisos de presupuestos que van a ritmo de pasarse, suscripciones y cobros fijos de mañana, cuánto apartar para tus metas (los domingos), metas cumplidas y, si quieres, un recordatorio para registrar los gastos del día. Cada tipo se prende o se apaga en tu perfil. |
 | 🏁 **Metas de ahorro** | Le pones nombre, valor y fecha (o se la cuentas a Aura) y te dice cuánto apartar **por día, por semana y por mes**, cuánto te falta y si llegas a tiempo con lo que normalmente te sobra. Si este mes vas gastando más de lo normal, te muestra cómo cambia el plan. Puedes vincularla a una cuenta de ahorros o ir abonando a mano. |
 | 🧪 **Simular escenarios** | En cada meta: ¿y si mis gastos suben 20%?, ¿y si ahorro 100 mil extra?, ¿y si muevo la fecha 3 meses? Ves el plan de hoy contra el escenario lado a lado. |
 | 🤔 **Simular decisiones** | Comprar una moto, tomar un crédito, mudarte o cambiar de empleo: cuota (sistema francés), intereses, cuánto pagas de una, cómo queda tu ahorro mensual, colchón y un veredicto (*viable*, *ajustado*, *riesgoso*) con sus razones y el efecto en tus metas. Guarda escenarios y compara hasta 3. |
@@ -119,6 +120,18 @@ cada deploy los sobrescribe).
 
 Desde ahí, cada vez que se fusione un cambio en `main`, Cloudflare publica la nueva versión sola.
 
+### 4. Activar las notificaciones
+
+Abre la app, toca tu inicial (arriba a la derecha) → **Notificaciones** y prende el interruptor. El celular te pide
+permiso una vez. Con **Enviarme una de prueba** confirmas que te llegan.
+
+- **Android** (Chrome, Edge, Firefox, Samsung Internet): funcionan desde el navegador o con la app instalada.
+- **iPhone**: solo con la app instalada en la pantalla de inicio (iOS 16.4 o más nuevo). Ábrela desde ese ícono y
+  actívalas ahí.
+
+No hay que configurar nada en Cloudflare: la revisión de cada noche es un *Cron Trigger* que ya viene en
+`wrangler.jsonc` y se publica solo.
+
 ---
 
 ## 💰 ¿Cuánto cuesta?
@@ -127,6 +140,7 @@ Para uso personal, normalmente **$0**:
 
 - **Workers** (plan gratis): 100.000 peticiones al día.
 - **D1** (plan gratis): 5 GB de almacenamiento.
+- **Cron Triggers y notificaciones push**: gratis (la revisión de la noche es una sola ejecución al día).
 - **Workers AI**: trae una cuota gratis diaria (10.000 *neurons*). Cada mensaje usa dos llamadas al modelo (entender
   y responder), así que alcanza para el uso normal de una persona. Si se agota, Aura avisa que la IA no respondió y
   vuelve a funcionar al día siguiente; mientras tanto puedes ver y editar tus cuentas, presupuestos e historial.
@@ -168,6 +182,9 @@ npm run deploy    # publicar desde la terminal (alternativa al panel)
 - Las peticiones que cambian datos se rechazan si vienen de otro origen.
 - 5 intentos fallidos de login desde la misma IP bloquean el acceso por 15 minutos.
 - La contraseña vive como secreto de Cloudflare, nunca en el código.
+- Las notificaciones push van cifradas de punta a punta (RFC 8291) y firmadas con llaves VAPID (RFC 8292) que el Worker
+  crea solo la primera vez y guarda en D1. El Worker solo envía a los servicios push de los navegadores (Google,
+  Mozilla, Apple y Microsoft).
 
 ---
 

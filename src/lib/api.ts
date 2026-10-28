@@ -2,10 +2,12 @@ import type {
   AccionGuardar,
   AnalisisImagen,
   Escenario,
+  EstadoPush,
   Hallazgos,
   Meta,
   MensajeHistorial,
   Movimiento,
+  PreferenciasAvisos,
   ResultadoAcciones,
   Resumen,
   RespuestaChat,
@@ -66,4 +68,10 @@ export const api = {
   scenarios: () => request<Escenario[]>('/api/scenarios'),
   saveScenario: (nombre: string, escenario: Escenario['escenario']) => request<Escenario[]>('/api/scenarios', json('POST', { nombre, escenario })),
   deleteScenario: (id: number) => request<Escenario[]>(`/api/scenarios/${id}`, json('DELETE')),
+  push: () => request<EstadoPush>('/api/push'),
+  pushSubscribe: (subscription: PushSubscriptionJSON, anterior?: string) =>
+    request<{ ok: true; dispositivos: number }>('/api/push/subscribe', json('POST', { subscription, anterior })),
+  pushUnsubscribe: (endpoint: string) => request<{ ok: true; dispositivos: number }>('/api/push/unsubscribe', json('POST', { endpoint })),
+  pushPreferences: (cambios: Partial<PreferenciasAvisos>) => request<PreferenciasAvisos>('/api/push/preferences', json('PUT', cambios)),
+  pushTest: () => request<{ enviadas: number; fallidas: number; vencidas: number }>('/api/push/test', json('POST')),
 };
