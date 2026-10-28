@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { ChartColumn, History, House, LogOut, RotateCcw, Sparkles, Wallet, type LucideIcon } from 'lucide-react';
-import type { Cuenta, Movimiento, Resumen, RespuestaChat } from '../shared/types';
+import type { Cuenta, Movimiento, ResultadoAcciones, Resumen } from '../shared/types';
 import { api, SessionExpiredError } from './lib/api';
 import LoginPage from './components/LoginPage';
 import InicioView from './components/InicioView';
@@ -100,7 +100,7 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
     return () => clearTimeout(t);
   }, [toast]);
 
-  function handleChatResult(r: RespuestaChat) {
+  function handleChatResult(r: { applied: ResultadoAcciones; summary: Resumen }) {
     setSummary(r.summary);
     if (r.applied.movimientos.length) {
       setTransactions((prev) => [...r.applied.movimientos, ...prev].sort(byDateDesc));

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
-import type { Fuente, MensajeHistorial, RespuestaChat } from '../shared/types';
+import type { AnalisisImagen, Fuente, MensajeHistorial, RespuestaChat } from '../shared/types';
 import type { Env } from './env';
 import { ensureSchema } from './schema';
 import {
@@ -16,7 +16,7 @@ import {
   verifySession,
 } from './auth';
 import {
-  type Accion,
+  MAX_BATCH,
   UserError,
   applyActions,
   createAccount,
@@ -25,6 +25,7 @@ import {
   getSummary,
   listAccounts,
   listTransactions,
+  previewActions,
   removeAccount,
   resetAll,
   setAccountBalance,
@@ -33,11 +34,12 @@ import {
 } from './finance';
 import {
   AiUnavailableError,
+  analyzeImage,
   buildContext,
   coachReply,
   extractActions,
   fallbackReply,
-  readReceipt,
+  sanitizeActions,
   transcribe,
 } from './ai';
 import { inferKind, isKind } from './accounts';
@@ -179,7 +181,7 @@ app.post('/api/reset', async (c) => {
   return c.json({ ok: true, summary: await getSummary(c.env.DB) });
 });
 
-// ─── Chat con Aura (texto, voz o foto) ────────────────────────────────────────
+// ─── Chat con Aura (texto o voz) ───────────────────────────────────────────────
 
 function stripDataUrl(value: string): string {
   const comma = value.indexOf(',');
@@ -187,7 +189,7 @@ function stripDataUrl(value: string): string {
 }
 
 app.post('/api/chat', bodyLimit({ maxSize: 14 * 1024 * 1024 }), async (c) => {
-  const body = await c.req.json<{ message?: string; audio?: string; image?: string; history?: MensajeHistorial[] }>();
+  const body = await c.req.json<{ message?: string; audio?: string; history?: MensajeHistorial[] }>();
   const db = c.env.DB;
   let message = String(body.message ?? '').trim().slice(0, 1000);
   const history = Array.isArray(body.history) ? body.history : [];
@@ -195,40 +197,17 @@ app.post('/api/chat', bodyLimit({ maxSize: 14 * 1024 * 1024 }), async (c) => {
 
   let fuente: Fuente = 'chat';
   let transcript: string | undefined;
-  let acciones: Accion[] = [];
-  let coachMessage = message;
 
   if (typeof body.audio === 'string' && body.audio) {
     if (body.audio.length > MAX_MEDIA_CHARS) throw new UserError('La nota de voz es muy larga. Intenta con menos de un minuto.');
     transcript = await transcribe(c.env, stripDataUrl(body.audio));
     if (!transcript) throw new UserError('No alcancé a escuchar nada en la nota de voz. ¿Me la repites?');
     message = transcript;
-    coachMessage = transcript;
     fuente = 'voz';
   }
+  if (!message) throw new UserError('Escríbeme algo o mándame una nota de voz.');
 
-  if (typeof body.image === 'string' && body.image) {
-    if (!/^data:image\/(jpeg|png|webp);base64,/.test(body.image)) throw new UserError('Esa imagen no es válida.');
-    if (body.image.length > MAX_MEDIA_CHARS) throw new UserError('La foto es muy pesada. Intenta con otra.');
-    fuente = 'foto';
-    const accion = await readReceipt(c.env, body.image, message, cuentas);
-    coachMessage = `Te mandé la foto de un recibo${message ? ` y te dije: "${message}"` : ''}.`;
-    if (accion) {
-      acciones = [accion];
-    } else {
-      const summary = await getSummary(db);
-      return c.json<RespuestaChat>({
-        reply: 'Parce, no pude leer el total en esa foto. 😕 Intenta con una foto más cerca y con buena luz, o escríbeme el gasto.',
-        applied: { movimientos: [], cuentasCreadas: [], presupuestos: [], avisos: [] },
-        summary,
-      });
-    }
-  } else if (message) {
-    acciones = await extractActions(c.env, message, cuentas);
-  } else {
-    throw new UserError('Escríbeme algo, mándame una nota de voz o una foto de un recibo.');
-  }
-
+  const acciones = await extractActions(c.env, message, cuentas);
   const applied = await applyActions(db, acciones, fuente);
   const summary = await getSummary(db);
   const recent = (await listTransactions(db, 30)).map((m) => ({
@@ -243,13 +222,36 @@ app.post('/api/chat', bodyLimit({ maxSize: 14 * 1024 * 1024 }), async (c) => {
 
   let reply = '';
   try {
-    reply = await coachReply(c.env, { user: c.get('user'), message: coachMessage, history, context });
+    reply = await coachReply(c.env, { user: c.get('user'), message, history, context });
   } catch (err) {
     console.error('No se pudo redactar la respuesta:', err);
   }
   if (!reply) reply = fallbackReply(applied);
 
   return c.json<RespuestaChat>({ reply, transcript, applied, summary });
+});
+
+// ─── Imágenes: analizar y luego guardar lo que el usuario confirme ──────────
+
+app.post('/api/images/analyze', bodyLimit({ maxSize: 10 * 1024 * 1024 }), async (c) => {
+  const body = await c.req.json<{ image?: string; note?: string }>();
+  const image = String(body.image ?? '');
+  if (!/^data:image\/(jpeg|png|webp);base64,/.test(image)) throw new UserError('Esa imagen no es válida. Usa una foto JPG o PNG.');
+  if (image.length > MAX_MEDIA_CHARS) throw new UserError('La imagen es muy pesada. Intenta con otra.');
+  const note = String(body.note ?? '').trim().slice(0, 300);
+  const db = c.env.DB;
+  const analysis = await analyzeImage(c.env, image, note, await listAccounts(db));
+  const { acciones, ...datos } = analysis;
+  return c.json<AnalisisImagen>({ ...datos, propuestas: await previewActions(db, acciones) });
+});
+
+app.post('/api/movements/apply', async (c) => {
+  const body = await c.req.json<{ acciones?: unknown }>();
+  if (!Array.isArray(body.acciones) || body.acciones.length === 0) throw new UserError('No hay movimientos para guardar.');
+  if (body.acciones.length > MAX_BATCH) throw new UserError(`Son demasiados movimientos de una vez (máximo ${MAX_BATCH}).`);
+  const acciones = sanitizeActions({ acciones: body.acciones }).filter((a) => a.accion !== 'presupuesto');
+  const applied = await applyActions(c.env.DB, acciones, 'foto', new Date(), MAX_BATCH);
+  return c.json({ applied, summary: await getSummary(c.env.DB) });
 });
 
 app.all('/api/*', (c) => c.json({ error: 'Ruta no encontrada' }, 404));

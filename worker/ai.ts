@@ -1,4 +1,4 @@
-import type { Cuenta, MensajeHistorial, ResultadoAcciones, Resumen } from '../shared/types';
+import type { Cuenta, MensajeHistorial, ResultadoAcciones, Resumen, TipoDocumento } from '../shared/types';
 import { fmtCOP } from '../shared/format';
 import type { Accion } from './finance';
 import { spendByGroup } from './finance';
@@ -46,8 +46,13 @@ export function parseJsonOutput(out: unknown): Record<string, unknown> | null {
   }
 }
 
-async function runJson(env: Env, messages: ChatMessage[], schema: object): Promise<Record<string, unknown> | null> {
-  const base = { messages, max_tokens: 700, temperature: 0 };
+async function runJson(
+  env: Env,
+  messages: ChatMessage[],
+  schema: object,
+  maxTokens = 700,
+): Promise<Record<string, unknown> | null> {
+  const base = { messages, max_tokens: maxTokens, temperature: 0 };
   let out: unknown;
   try {
     out = await env.AI.run(model(env), { ...base, response_format: { type: 'json_schema', json_schema: schema } } as never);
@@ -180,67 +185,114 @@ export async function extractActions(env: Env, message: string, cuentas: Cuenta[
   return sanitizeActions(parsed);
 }
 
-// ─── 2. Leer la foto de un recibo ─────────────────────────────────────────────
+// ─── 2. Analizar imágenes (recibos, facturas, comprobantes, extractos) ────────
 
-const RECEIPT_SCHEMA = {
+const DOC_TYPES: TipoDocumento[] = ['recibo', 'factura', 'comprobante', 'extracto', 'saldo', 'otro'];
+
+const IMAGE_SCHEMA = {
   type: 'object',
   properties: {
-    es_recibo: { type: 'boolean' },
-    total: { type: 'number' },
+    tipo_documento: { type: 'string', enum: DOC_TYPES },
+    resumen: STRING,
     comercio: STRING,
     fecha: STRING,
-    categoria: STRING,
-    cuenta: STRING,
-    tipo_cuenta: { type: 'string', enum: ['', ...ACCOUNT_KINDS] },
+    total: { type: 'number' },
+    items: {
+      type: 'array',
+      items: { type: 'object', properties: { descripcion: STRING, monto: { type: 'number' } }, required: ['descripcion', 'monto'] },
+    },
+    movimientos: { type: 'array', items: ACTION_ITEM },
   },
-  required: ['es_recibo', 'total', 'comercio', 'fecha', 'categoria', 'cuenta', 'tipo_cuenta'],
+  required: ['tipo_documento', 'resumen', 'comercio', 'fecha', 'total', 'items', 'movimientos'],
 };
 
-export async function readReceipt(
+export interface ImageAnalysis {
+  tipoDocumento: TipoDocumento;
+  resumen: string;
+  comercio: string;
+  fecha: string;
+  total: number;
+  items: { descripcion: string; monto: number }[];
+  acciones: Accion[];
+}
+
+export function imagePrompt(cuentas: Cuenta[], note: string, now = new Date()): string {
+  return `Analiza esta imagen de un documento de plata en Colombia y extrae los datos en JSON. Hoy es ${bogotaWeekday(now)} ${bogotaDay(now)}.
+
+CUENTAS DEL USUARIO:
+${accountsList(cuentas)}
+
+NOTA DEL USUARIO: ${note ? `"${note}"` : '(sin nota)'} — puede decir con qué pagó o qué es la imagen.
+
+tipo_documento:
+- "recibo": tiquete de caja, cuenta de restaurante, recibo de servicio público o de un pago en un negocio.
+- "factura": factura electrónica o de venta.
+- "comprobante": comprobante o pantallazo de una transferencia o pago (Nequi, Daviplata, Bancolombia, PSE, Bre-B, consignación).
+- "extracto": lista de varios movimientos (extracto bancario, historial de la app del banco, estado de cuenta de la tarjeta).
+- "saldo": pantallazo donde se ve el saldo disponible de una cuenta o lo que se debe en una tarjeta.
+- "otro": cualquier otra imagen sin movimientos de plata.
+
+CAMPOS:
+- resumen: una frase corta y sencilla de lo que ves ("Factura del Éxito por $ 45.900 del 26 de octubre").
+- comercio: negocio, banco o persona principal del documento. "" si no hay.
+- fecha: "YYYY-MM-DD" del documento si aparece, si no "".
+- total: total pagado en pesos. 0 si no aplica.
+- items: hasta 15 productos o líneas con su valor, solo si se leen bien. [] si no.
+- movimientos: lo que hay que registrar, con el mismo formato del chat:
+  · recibo o factura: UN solo "gasto" por el total, descripcion = comercio, con la categoría que mejor aplique.
+  · comprobante: si el usuario envió o pagó plata → "gasto" (descripcion "Pago a ..." o "Envío a ..."); si recibió plata → "ingreso". Solo si es entre dos cuentas suyas → "transferencia". cuenta = la app o el banco del comprobante.
+  · extracto: un movimiento por cada fila, máximo 30. Compras, cargos, débitos y retiros = "gasto"; abonos, créditos y pagos recibidos = "ingreso"; pagos a la tarjeta de crédito = "transferencia" hacia la tarjeta. cuenta = el banco o la tarjeta del extracto. Usa la fecha de cada fila. Ignora saldos y totales.
+  · saldo: un movimiento "saldo" con el valor que se ve y la cuenta (en tarjetas, lo que se debe).
+  · otro: [].
+  monto: ${AMOUNT_RULES}
+  categoria: para gasto EXACTAMENTE una de: ${EXPENSE_CATEGORIES.join(', ')}. Para ingreso una de: ${INCOME_CATEGORIES.join(', ')}. "" en transferencia o saldo.
+  tipo_cuenta: efectivo, banco, billetera (Nequi, Daviplata), credito o ahorro según la cuenta; "" si no se sabe.
+  fecha: "YYYY-MM-DD" del movimiento si se ve, si no "".
+
+No inventes datos: si algo no se lee bien, déjalo en "" o 0 y no crees ese movimiento.
+Responde SOLO con el JSON.`;
+}
+
+export function sanitizeImageAnalysis(parsed: Record<string, unknown> | null): ImageAnalysis {
+  const tipo = str(parsed?.tipo_documento) as TipoDocumento;
+  const total = Math.round(Number(parsed?.total));
+  const items = (Array.isArray(parsed?.items) ? (parsed!.items as Record<string, unknown>[]) : [])
+    .filter((i) => i && str(i.descripcion) && Number.isFinite(Number(i.monto)))
+    .slice(0, 15)
+    .map((i) => ({ descripcion: str(i.descripcion).slice(0, 80), monto: Math.round(Number(i.monto)) }));
+  return {
+    tipoDocumento: DOC_TYPES.includes(tipo) ? tipo : 'otro',
+    resumen: str(parsed?.resumen).slice(0, 240),
+    comercio: str(parsed?.comercio).slice(0, 80),
+    fecha: /^\d{4}-\d{2}-\d{2}$/.test(str(parsed?.fecha)) ? str(parsed?.fecha) : '',
+    total: Number.isFinite(total) && total > 0 ? total : 0,
+    items,
+    acciones: sanitizeActions({ acciones: parsed?.movimientos }).filter((a) => a.accion !== 'presupuesto'),
+  };
+}
+
+export async function analyzeImage(
   env: Env,
   imageDataUrl: string,
   note: string,
   cuentas: Cuenta[],
   now = new Date(),
-): Promise<Accion | null> {
-  const prompt = `Mira esta foto. Si es un recibo, factura, tiquete o comprobante de pago colombiano, extrae los datos en JSON.
-
-- es_recibo: false si la foto no es un comprobante de pago o no se lee el total.
-- total: lo que realmente se pagó, entero en pesos (busca "TOTAL", "TOTAL A PAGAR", "VALOR TOTAL"; ignora subtotal, IVA y cambio). ${AMOUNT_RULES}
-- comercio: nombre del negocio, corto ("Éxito", "Farmatodo", "Restaurante El Corral").
-- fecha: "YYYY-MM-DD" si aparece en el recibo, si no "". Hoy es ${bogotaDay(now)}.
-- categoria: EXACTAMENTE una de: ${EXPENSE_CATEGORIES.join(', ')}.
-- cuenta y tipo_cuenta: solo si la NOTA DEL USUARIO dice con qué pagó (cuentas: ${cuentas.map((c) => c.nombre).join(', ')}); si no, "".
-
-NOTA DEL USUARIO: ${note ? `"${note}"` : '(sin nota)'}
-
-Responde SOLO con el JSON.`;
+): Promise<ImageAnalysis> {
   const parsed = await runJson(
     env,
     [
       {
         role: 'user',
         content: [
-          { type: 'text', text: prompt },
+          { type: 'text', text: imagePrompt(cuentas, note, now) },
           { type: 'image_url', image_url: { url: imageDataUrl } },
         ],
       },
     ],
-    RECEIPT_SCHEMA,
+    IMAGE_SCHEMA,
+    3000,
   );
-  if (!parsed || parsed.es_recibo === false) return null;
-  const total = Math.round(Number(parsed.total));
-  if (!Number.isFinite(total) || total <= 0) return null;
-  return {
-    accion: 'gasto',
-    monto: total,
-    categoria: str(parsed.categoria),
-    descripcion: str(parsed.comercio) || 'Recibo',
-    cuenta: str(parsed.cuenta),
-    cuenta_destino: '',
-    tipo_cuenta: str(parsed.tipo_cuenta),
-    fecha: str(parsed.fecha),
-  };
+  return sanitizeImageAnalysis(parsed);
 }
 
 // ─── 3. Notas de voz ──────────────────────────────────────────────────────────

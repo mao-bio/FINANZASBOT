@@ -1,4 +1,12 @@
-import type { MensajeHistorial, Movimiento, Resumen, RespuestaChat } from '../../shared/types';
+import type {
+  AccionGuardar,
+  AnalisisImagen,
+  MensajeHistorial,
+  Movimiento,
+  ResultadoAcciones,
+  Resumen,
+  RespuestaChat,
+} from '../../shared/types';
 
 export class SessionExpiredError extends Error {}
 
@@ -40,6 +48,9 @@ export const api = {
   setBudget: (categoria: string, monto: number) => request<WithSummary>('/api/budgets', json('PUT', { categoria, monto })),
   deleteBudget: (categoria: string) => request<WithSummary>(`/api/budgets/${encodeURIComponent(categoria)}`, json('DELETE')),
   reset: () => request<WithSummary>('/api/reset', json('POST')),
-  chat: (body: { message?: string; audio?: string; image?: string; history: MensajeHistorial[] }) =>
+  chat: (body: { message?: string; audio?: string; history: MensajeHistorial[] }) =>
     request<RespuestaChat>('/api/chat', json('POST', body)),
+  analyzeImage: (image: string, note: string) => request<AnalisisImagen>('/api/images/analyze', json('POST', { image, note })),
+  applyMovements: (acciones: AccionGuardar[]) =>
+    request<{ applied: ResultadoAcciones; summary: Resumen }>('/api/movements/apply', json('POST', { acciones })),
 };

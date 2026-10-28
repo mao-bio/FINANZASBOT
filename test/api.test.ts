@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Resumen, RespuestaChat } from '../shared/types';
+import type { AnalisisImagen, Movimiento, Resumen, RespuestaChat } from '../shared/types';
 import { api, fakeAI, gasto, login, resetDb, scriptedAI } from './helpers';
 
 let cookie: string;
@@ -164,22 +164,6 @@ describe('chat', () => {
     expect(extraction[1].content).toBe('gasté veinte mil en bus');
   });
 
-  it('lee recibos con la cámara', async () => {
-    const out = await chat(
-      { image: 'data:image/jpeg;base64,/9j/AAA=', message: 'pagué con Nequi' },
-      scriptedAI({
-        receipt: { es_recibo: true, total: 45_900, comercio: 'Éxito', fecha: '', categoria: 'Comida - Mercado', cuenta: 'Nequi', tipo_cuenta: 'billetera' },
-      }),
-    );
-    expect(out.applied.movimientos[0]).toMatchObject({ tipo: 'gasto', monto: 45_900, descripcion: 'Éxito', cuenta: 'Nequi', fuente: 'foto' });
-  });
-
-  it('avisa cuando la foto no es un recibo', async () => {
-    const out = await chat({ image: 'data:image/png;base64,iVBOR=' }, scriptedAI({ receipt: { es_recibo: false } }));
-    expect(out.applied.movimientos).toEqual([]);
-    expect(out.reply).toMatch(/no pude leer/i);
-  });
-
   it('responde 503 claro si Workers AI falla', async () => {
     const res = await api('/api/chat', {
       method: 'POST',
@@ -275,5 +259,125 @@ describe('cuentas, historial y presupuestos', () => {
     const { summary } = await res.json<{ summary: Resumen }>();
     expect(summary.cuentas.map((c) => c.nombre)).toEqual(['Efectivo']);
     expect(summary.totales.neto).toBe(0);
+  });
+});
+
+describe('imágenes', () => {
+  const JPG = 'data:image/jpeg;base64,/9j/AAA=';
+
+  async function analyze(image: Record<string, unknown>, note = '', calls?: { model: string; inputs: Record<string, unknown> }[]) {
+    const res = await api('/api/images/analyze', { method: 'POST', cookie, body: { image: JPG, note }, ai: scriptedAI({ image, calls }) });
+    expect(res.status, await res.clone().text()).toBe(200);
+    return res.json<AnalisisImagen>();
+  }
+
+  it('analiza una factura sin guardar nada', async () => {
+    await api('/api/accounts', { method: 'POST', cookie, body: { nombre: 'Nequi', tipo: 'billetera' } });
+    const calls: { model: string; inputs: Record<string, unknown> }[] = [];
+    const out = await analyze(
+      {
+        tipo_documento: 'factura',
+        resumen: 'Factura del Éxito por $ 45.900',
+        comercio: 'Éxito',
+        fecha: '2026-10-20',
+        total: 45900,
+        items: [
+          { descripcion: 'Leche', monto: 4900 },
+          { descripcion: 'Arroz', monto: 41000 },
+          { descripcion: '', monto: 10 },
+        ],
+        movimientos: [gasto(45_900, { descripcion: 'Éxito', cuenta: 'nequi', tipo_cuenta: 'billetera', fecha: '2026-10-20' })],
+      },
+      'pagué con Nequi',
+      calls,
+    );
+    expect(out).toMatchObject({ tipoDocumento: 'factura', comercio: 'Éxito', total: 45_900, fecha: '2026-10-20' });
+    expect(out.items).toEqual([
+      { descripcion: 'Leche', monto: 4900 },
+      { descripcion: 'Arroz', monto: 41000 },
+    ]);
+    expect(out.propuestas).toEqual([
+      expect.objectContaining({
+        accion: 'gasto',
+        monto: 45_900,
+        categoria: 'Comida - Mercado',
+        descripcion: 'Éxito',
+        cuenta: 'Nequi',
+        cuentaNueva: false,
+        posibleDuplicado: false,
+      }),
+    ]);
+    const content = (calls[0].inputs.messages as { content: { type: string; text?: string; image_url?: { url: string } }[] }[])[0].content;
+    expect(content[0].text).toContain('pagué con Nequi');
+    expect(content[1].image_url?.url).toBe(JPG);
+    const list = await (await api('/api/transactions', { cookie })).json<Movimiento[]>();
+    expect(list).toEqual([]);
+  });
+
+  it('lee extractos, marca posibles repetidos y cuentas nuevas', async () => {
+    await chat({ message: 'mercado 80 mil' }, scriptedAI({ acciones: [gasto(80_000)] }));
+    const hoy = new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
+    const out = await analyze({
+      tipo_documento: 'extracto',
+      resumen: 'Movimientos de Davivienda',
+      comercio: 'Davivienda',
+      fecha: '',
+      total: 0,
+      items: [],
+      movimientos: [
+        gasto(80_000, { cuenta: 'Davivienda', tipo_cuenta: 'banco', fecha: hoy }),
+        { accion: 'ingreso', monto: 2_500_000, categoria: 'Salario', descripcion: 'Nómina', cuenta: 'Davivienda', tipo_cuenta: 'banco', fecha: hoy },
+        gasto(0, { cuenta: 'Davivienda' }),
+        { accion: 'transferencia', monto: 100_000, cuenta: 'Davivienda', cuenta_destino: '' },
+        { accion: 'presupuesto', monto: 500_000, categoria: 'Comida' },
+      ],
+    });
+    expect(out.propuestas).toHaveLength(2);
+    expect(out.propuestas[0]).toMatchObject({ accion: 'gasto', cuenta: 'Davivienda', cuentaNueva: true, posibleDuplicado: true, fecha: hoy });
+    expect(out.propuestas[1]).toMatchObject({ accion: 'ingreso', categoria: 'Salario', posibleDuplicado: false });
+  });
+
+  it('guarda solo lo que el usuario confirma', async () => {
+    const res = await api('/api/movements/apply', {
+      method: 'POST',
+      cookie,
+      body: {
+        acciones: [
+          { accion: 'gasto', monto: 45_900, categoria: 'Comida - Mercado', descripcion: 'Éxito', cuenta: 'Davivienda', cuenta_destino: '', tipo_cuenta: 'banco', fecha: '' },
+          { accion: 'ingreso', monto: 2_500_000, categoria: 'Salario', descripcion: 'Nómina', cuenta: 'Davivienda', cuenta_destino: '', tipo_cuenta: 'banco', fecha: '' },
+          { accion: 'presupuesto', monto: 1, categoria: 'Comida' },
+        ],
+      },
+    });
+    expect(res.status).toBe(200);
+    const { applied, summary } = await res.json<{ applied: RespuestaChat['applied']; summary: Resumen }>();
+    expect(applied.movimientos.map((m) => [m.tipo, m.monto, m.fuente])).toEqual([
+      ['gasto', 45_900, 'foto'],
+      ['ingreso', 2_500_000, 'foto'],
+    ]);
+    expect(applied.cuentasCreadas).toEqual(['Davivienda']);
+    expect(applied.presupuestos).toEqual([]);
+    expect(saldo(summary, 'Davivienda')).toBe(2_454_100);
+  });
+
+  it('valida lo que se manda a guardar', async () => {
+    expect((await api('/api/movements/apply', { method: 'POST', cookie, body: { acciones: [] } })).status).toBe(400);
+    const muchas = Array.from({ length: 31 }, () => gasto(1000));
+    expect((await api('/api/movements/apply', { method: 'POST', cookie, body: { acciones: muchas } })).status).toBe(400);
+    expect((await api('/api/movements/apply', { method: 'POST', body: { acciones: [gasto(1000)] } })).status).toBe(401);
+  });
+
+  it('rechaza archivos que no son imágenes y avisa si la IA falla', async () => {
+    let res = await api('/api/images/analyze', { method: 'POST', cookie, body: { image: 'data:text/html;base64,PGgxPg==' } });
+    expect(res.status).toBe(400);
+    res = await api('/api/images/analyze', {
+      method: 'POST',
+      cookie,
+      body: { image: JPG },
+      ai: fakeAI(() => {
+        throw new Error('quota');
+      }),
+    });
+    expect(res.status).toBe(503);
   });
 });

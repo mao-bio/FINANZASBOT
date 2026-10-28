@@ -3,6 +3,7 @@ import type {
   Fuente,
   Movimiento,
   Presupuesto,
+  Propuesta,
   ResultadoAcciones,
   Resumen,
   TipoCuenta,
@@ -10,30 +11,26 @@ import type {
   TotalMes,
 } from '../shared/types';
 import { fmtCOP } from '../shared/format';
-import {
-  defaultAccount,
-  displayName,
-  findAccount,
-  inferKind,
-  isGenericName,
-  isKind,
-  kindFromWords,
-} from './accounts';
+import { defaultAccount, isKind, planAccount } from './accounts';
 import {
   ADJUST_CATEGORY,
+  EXPENSE_CATEGORIES,
   EXPENSE_GROUPS,
+  INCOME_CATEGORIES,
   TRANSFER_CATEGORY,
   groupOf,
   normalizeCategory,
   normalizeGroup,
 } from './categories';
-import { bogotaMonth, monthRange, resolveTxDate, shiftMonth } from './dates';
+import { bogotaDay, bogotaMonth, monthRange, resolveTxDate, shiftMonth } from './dates';
 import { seedDefaults } from './schema';
 
 /** Error con mensaje apto para mostrarle al usuario (HTTP 400). */
 export class UserError extends Error {}
 
 const MAX_AMOUNT = 100_000_000_000;
+/** Máximo de movimientos que se revisan o guardan de una sola imagen */
+export const MAX_BATCH = 30;
 
 // ─── Cuentas ──────────────────────────────────────────────────────────────────
 
@@ -338,6 +335,7 @@ export async function getSummary(db: D1Database, now = new Date()): Promise<Resu
     mes: { ...actual, porCategoria, presupuestos },
     historico,
     grupos: EXPENSE_GROUPS,
+    categorias: { gasto: [...EXPENSE_CATEGORIES], ingreso: [...INCOME_CATEGORIES] },
   };
 }
 
@@ -377,14 +375,10 @@ class AccountResolver {
 
   /** Encuentra la cuenta mencionada; si no existe, la crea. Sin mención → cuenta principal. */
   async resolve(wanted: string | undefined, kindHint: string | undefined): Promise<Cuenta> {
-    const name = cleanText(wanted, 40);
-    const hint = isKind(kindHint) ? kindHint : null;
-    if (!name && !hint) return this.principal();
-    const found = findAccount(this.accounts, name, hint);
-    if (found) return found;
-    if (isGenericName(name) && !hint && !kindFromWords(name)) return this.principal();
-    const kind = hint ?? inferKind(name);
-    const { cuenta, creada } = await createAccount(this.db, displayName(name, kind), kind);
+    const plan = planAccount(this.accounts, wanted ?? '', isKind(kindHint) ? kindHint : null);
+    if (plan.kind === 'existing') return plan.cuenta;
+    if (plan.kind === 'principal') return this.principal();
+    const { cuenta, creada } = await createAccount(this.db, plan.nombre, plan.tipo);
     if (!this.accounts.some((a) => a.id === cuenta.id)) this.accounts.push(cuenta);
     if (creada) this.result.cuentasCreadas.push(cuenta.nombre);
     return cuenta;
@@ -399,17 +393,82 @@ class AccountResolver {
   }
 }
 
+const DAY_MS = 86_400_000;
+
+function daysBetween(a: string, b: string): number {
+  return Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / DAY_MS;
+}
+
+/**
+ * Prepara para revisión lo que la IA encontró en una imagen, sin guardar nada:
+ * normaliza categorías, dice qué cuenta se usaría (o si se crearía una nueva)
+ * y marca los movimientos que parecen ya registrados.
+ */
+export async function previewActions(db: D1Database, acciones: Accion[], now = new Date()): Promise<Propuesta[]> {
+  const accounts = await listAccounts(db);
+  const principal = defaultAccount(accounts);
+  const describe = (wanted: string | undefined, hint: TipoCuenta | null) => {
+    const plan = planAccount(accounts, wanted ?? '', hint);
+    if (plan.kind === 'existing') return { nombre: plan.cuenta.nombre, nueva: false };
+    if (plan.kind === 'new') return { nombre: plan.nombre, nueva: true };
+    return { nombre: principal?.nombre ?? 'Efectivo', nueva: !principal };
+  };
+
+  const propuestas: Propuesta[] = [];
+  for (const a of acciones) {
+    const monto = Math.round(Number(a.monto));
+    if (a.accion === 'presupuesto' || !Number.isFinite(monto) || monto < 0 || monto > MAX_AMOUNT) continue;
+    if (monto === 0 && a.accion !== 'saldo') continue;
+    if (a.accion === 'transferencia' && !cleanText(a.cuenta_destino)) continue;
+    const hint = isKind(a.tipo_cuenta) ? a.tipo_cuenta : null;
+    const origen = describe(a.cuenta, a.accion === 'transferencia' ? null : hint);
+    const destino = a.accion === 'transferencia' ? describe(a.cuenta_destino, hint) : { nombre: '', nueva: false };
+    const categoria = a.accion === 'gasto' || a.accion === 'ingreso' ? normalizeCategory(a.categoria, a.accion) : '';
+    propuestas.push({
+      accion: a.accion,
+      monto,
+      categoria,
+      descripcion: cleanText(a.descripcion) || (categoria ? categoria.split(' - ').pop()! : ''),
+      cuenta: origen.nombre,
+      cuentaNueva: origen.nueva,
+      cuentaDestino: destino.nombre,
+      cuentaDestinoNueva: destino.nueva,
+      tipoCuenta: hint ?? '',
+      fecha: bogotaDay(new Date(resolveTxDate(a.fecha, now))),
+      posibleDuplicado: false,
+    });
+    if (propuestas.length >= MAX_BATCH) break;
+  }
+
+  const comparables = propuestas.filter((p) => p.accion !== 'saldo');
+  if (comparables.length) {
+    const earliest = comparables.map((p) => p.fecha).sort()[0];
+    const since = new Date(Date.parse(`${earliest}T05:00:00Z`) - 3 * DAY_MS).toISOString();
+    const { results } = await db
+      .prepare(`SELECT type, amount, date FROM transactions WHERE date >= ? AND type IN ('gasto', 'ingreso', 'transferencia')`)
+      .bind(since)
+      .all<{ type: string; amount: number; date: string }>();
+    for (const p of comparables) {
+      p.posibleDuplicado = results.some(
+        (r) => r.type === p.accion && Number(r.amount) === p.monto && daysBetween(bogotaDay(new Date(r.date)), p.fecha) <= 2,
+      );
+    }
+  }
+  return propuestas;
+}
+
 /** Ejecuta en la base de datos lo que la IA entendió del mensaje. */
 export async function applyActions(
   db: D1Database,
   acciones: Accion[],
   fuente: Fuente,
   now = new Date(),
+  limit = 8,
 ): Promise<ResultadoAcciones> {
   const result: ResultadoAcciones = { movimientos: [], cuentasCreadas: [], presupuestos: [], avisos: [] };
   const resolver = new AccountResolver(db, await listAccounts(db), result);
 
-  for (const a of acciones.slice(0, 8)) {
+  for (const a of acciones.slice(0, limit)) {
     const monto = Math.round(Number(a.monto));
     const allowsZero = a.accion === 'saldo';
     if (!Number.isFinite(monto) || monto < 0 || (monto === 0 && !allowsZero) || monto > MAX_AMOUNT) {
