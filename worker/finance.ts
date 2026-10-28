@@ -355,6 +355,8 @@ export async function resetAll(db: D1Database): Promise<void> {
     db.prepare(`DELETE FROM budgets`),
     db.prepare(`DELETE FROM accounts`),
     db.prepare(`DELETE FROM meta WHERE key = 'seeded'`),
+    // Las suscripciones push y sus llaves se quedan: son del celular, no de tus datos.
+    db.prepare(`DELETE FROM push_log`),
   ]);
   await seedDefaults(db);
 }

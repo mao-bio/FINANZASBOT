@@ -2,7 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Bell, BellOff, ChartColumn, History, House, LogOut, RotateCcw, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import type { Cuenta, Hallazgos, Meta, Movimiento, ResultadoAcciones, Resumen } from '../shared/types';
 import { api, SessionExpiredError } from './lib/api';
-import { disableNotifications, enableNotifications, notificationsEnabled, notificationsSupported, notify } from './lib/notify';
+import { estadoAvisos, sincronizarAvisos, type EstadoAvisos } from './lib/notify';
 import LoginPage from './components/LoginPage';
 import InicioView from './components/InicioView';
 import ChatView, { clearChatHistory } from './components/ChatView';
@@ -10,6 +10,7 @@ import CuentasView, { AccountSheet } from './components/CuentasView';
 import HistorialView from './components/HistorialView';
 import { TxSheet } from './components/TxRow';
 import { ConfirmDialog, Sheet } from './components/Dialogs';
+import AvisosSheet from './components/AvisosSheet';
 
 // Las gráficas (recharts) pesan: Análisis y Metas se cargan solo al abrirlas.
 const AnalisisView = lazy(() => import('./components/AnalisisView'));
@@ -26,6 +27,16 @@ const TABS: { id: Tab; label: string; Icon: LucideIcon }[] = [
   { id: 'metas', label: 'Metas', Icon: Target },
   { id: 'historial', label: 'Movimientos', Icon: History },
 ];
+
+/** Las notificaciones abren la app en una pantalla: '/?ir=metas', '/?ir=hallazgos'… */
+const RUTAS: Record<string, { tab: Tab; panel?: AnalisisPanel }> = {
+  hallazgos: { tab: 'analisis', panel: 'hallazgos' },
+  analisis: { tab: 'analisis' },
+  metas: { tab: 'metas' },
+  aura: { tab: 'aura' },
+  movimientos: { tab: 'historial' },
+};
+let rutaInicial = RUTAS[new URLSearchParams(window.location.search).get('ir') ?? ''] ?? { tab: 'inicio' as Tab };
 
 const loadingScreen = (
   <div className="screen">
@@ -59,12 +70,13 @@ export default function App() {
 const byDateDesc = (a: Movimiento, b: Movimiento) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : b.id - a.id);
 
 function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) {
-  const [tab, setTab] = useState<Tab>('inicio');
-  const [analisisPanel, setAnalisisPanel] = useState<AnalisisPanel>('resumen');
+  const [tab, setTab] = useState<Tab>(rutaInicial.tab);
+  const [analisisPanel, setAnalisisPanel] = useState<AnalisisPanel>(rutaInicial.panel ?? 'resumen');
   const [summary, setSummary] = useState<Resumen | null>(null);
   const [insights, setInsights] = useState<Hallazgos | null>(null);
   const [goals, setGoals] = useState<Meta[] | null>(null);
-  const [notifOn, setNotifOn] = useState(notificationsEnabled);
+  const [estadoNotif, setEstadoNotif] = useState<EstadoAvisos | null>(null);
+  const [avisosOpen, setAvisosOpen] = useState(false);
   const [transactions, setTransactions] = useState<Movimiento[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [auraPrompt, setAuraPrompt] = useState<string | null>(null);
@@ -132,7 +144,6 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
     if (r.applied.movimientos.length) {
       setTransactions((prev) => [...r.applied.movimientos, ...prev].sort(byDateDesc));
     }
-    void notify(r.applied.alertas);
   }
 
   function go(to: Tab | 'hallazgos') {
@@ -140,16 +151,16 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
     setTab(to === 'hallazgos' ? 'analisis' : to);
   }
 
-  async function toggleNotifications() {
-    if (notifOn) {
-      disableNotifications();
-      setNotifOn(false);
-      return;
-    }
-    const ok = await enableNotifications();
-    setNotifOn(ok);
-    if (!ok) setToast('El navegador no dio permiso. Puedes activarlo en los ajustes del sitio; las alertas igual salen dentro de la app.');
-  }
+  // Si este celular ya tenía notificaciones, se lo recuerda al Worker. Y limpia el '?ir=' de la dirección.
+  useEffect(() => {
+    rutaInicial = { tab: 'inicio' };
+    if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
+    sincronizarAvisos().catch((err) => console.warn('No se pudieron sincronizar las notificaciones', err));
+  }, []);
+
+  useEffect(() => {
+    if (profileOpen) void estadoAvisos().then(setEstadoNotif);
+  }, [profileOpen]);
 
   async function deleteTransaction(id: number): Promise<boolean> {
     const res = await run(() => api.deleteTransaction(id));
@@ -274,19 +285,23 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
       {profileOpen && (
         <Sheet title={user} onClose={() => setProfileOpen(false)}>
           <div className="menu-list">
-            {notificationsSupported() && (
-              <button className="menu-item" role="switch" aria-checked={notifOn} onClick={toggleNotifications}>
-                {notifOn ? <Bell size={20} aria-hidden="true" /> : <BellOff size={20} aria-hidden="true" />}
-                <span>
-                  Avisos de presupuesto: {notifOn ? 'activos' : 'apagados'}
-                  <small>
-                    {notifOn
-                      ? 'Te aviso en el celular cuando llegues al 80% de un presupuesto o te pases'
-                      : 'Actívalos para recibir un aviso cuando te acerques a tus límites'}
-                  </small>
-                </span>
-              </button>
-            )}
+            <button
+              className="menu-item"
+              onClick={() => {
+                setProfileOpen(false);
+                setAvisosOpen(true);
+              }}
+            >
+              {estadoNotif === 'activo' ? <Bell size={20} aria-hidden="true" /> : <BellOff size={20} aria-hidden="true" />}
+              <span>
+                Notificaciones{estadoNotif === 'activo' ? ': activas' : ''}
+                <small>
+                  {estadoNotif === 'activo'
+                    ? 'Te llegan aunque la app esté cerrada'
+                    : 'Presupuestos, cobros y metas en tu celular, aunque la app esté cerrada'}
+                </small>
+              </span>
+            </button>
             <button className="menu-item" onClick={() => setConfirm('logout')}>
               <LogOut size={20} aria-hidden="true" />
               <span>
@@ -304,6 +319,8 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
           </div>
         </Sheet>
       )}
+
+      {avisosOpen && <AvisosSheet run={run} onClose={() => setAvisosOpen(false)} onToast={setToast} />}
 
       {confirm && (
         <ConfirmDialog
