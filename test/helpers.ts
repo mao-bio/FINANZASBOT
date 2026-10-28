@@ -16,7 +16,7 @@ export function scriptedAI(opts: {
   acciones?: unknown[];
   reply?: string;
   transcript?: string;
-  receipt?: Record<string, unknown>;
+  image?: Record<string, unknown>;
   calls?: { model: string; inputs: Record<string, unknown> }[];
 }): Ai {
   return fakeAI((model, inputs) => {
@@ -24,7 +24,9 @@ export function scriptedAI(opts: {
     if (model.includes('whisper')) return { text: opts.transcript ?? '' };
     if (inputs.response_format) {
       const schema = JSON.stringify(inputs.response_format);
-      if (schema.includes('es_recibo')) return { response: opts.receipt ?? { es_recibo: false } };
+      if (schema.includes('tipo_documento')) {
+        return { response: opts.image ?? { tipo_documento: 'otro', resumen: '', comercio: '', fecha: '', total: 0, items: [], movimientos: [] } };
+      }
       return { response: { acciones: opts.acciones ?? [] } };
     }
     return { response: opts.reply ?? 'Listo parce.' };

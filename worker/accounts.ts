@@ -91,3 +91,22 @@ export function findAccount(accounts: Cuenta[], wanted: string, hint: TipoCuenta
 export function isGenericName(wanted: string): boolean {
   return !core(wanted);
 }
+
+export type AccountPlan =
+  | { kind: 'existing'; cuenta: Cuenta }
+  | { kind: 'principal' }
+  | { kind: 'new'; nombre: string; tipo: TipoCuenta };
+
+/**
+ * Decide qué cuenta usar para lo que dijo el usuario, sin tocar la base:
+ * una existente, la principal o una nueva por crear.
+ */
+export function planAccount(accounts: Cuenta[], wanted: string, hint: TipoCuenta | null): AccountPlan {
+  const name = wanted.replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (!name && !hint) return { kind: 'principal' };
+  const found = findAccount(accounts, name, hint);
+  if (found) return { kind: 'existing', cuenta: found };
+  if (isGenericName(name) && !hint && !kindFromWords(name)) return { kind: 'principal' };
+  const tipo = hint ?? inferKind(name);
+  return { kind: 'new', nombre: displayName(name, tipo), tipo };
+}

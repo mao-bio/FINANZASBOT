@@ -50,6 +50,8 @@ export interface Resumen {
   historico: TotalMes[];
   /** Grupos de gasto disponibles para presupuestos */
   grupos: string[];
+  /** Catálogo completo de categorías */
+  categorias: { gasto: string[]; ingreso: string[] };
 }
 
 export interface ResultadoAcciones {
@@ -69,4 +71,46 @@ export interface RespuestaChat {
 export interface MensajeHistorial {
   role: 'user' | 'assistant';
   content: string;
+}
+
+export type TipoDocumento = 'recibo' | 'factura' | 'comprobante' | 'extracto' | 'saldo' | 'otro';
+
+/** Movimiento que la IA encontró en una imagen, listo para que el usuario lo revise. */
+export interface Propuesta {
+  accion: 'gasto' | 'ingreso' | 'transferencia' | 'saldo';
+  monto: number;
+  categoria: string;
+  descripcion: string;
+  cuenta: string;
+  /** La cuenta no existe todavía: se crearía al guardar */
+  cuentaNueva: boolean;
+  cuentaDestino: string;
+  cuentaDestinoNueva: boolean;
+  tipoCuenta: TipoCuenta | '';
+  /** 'YYYY-MM-DD' en hora de Colombia */
+  fecha: string;
+  /** Ya hay un movimiento igual (mismo tipo y monto, ±2 días) */
+  posibleDuplicado: boolean;
+}
+
+export interface AnalisisImagen {
+  tipoDocumento: TipoDocumento;
+  resumen: string;
+  comercio: string;
+  fecha: string;
+  total: number;
+  items: { descripcion: string; monto: number }[];
+  propuestas: Propuesta[];
+}
+
+/** Lo que el cliente manda para guardar (mismo formato que entiende el chat) */
+export interface AccionGuardar {
+  accion: Propuesta['accion'];
+  monto: number;
+  categoria: string;
+  descripcion: string;
+  cuenta: string;
+  cuenta_destino: string;
+  tipo_cuenta: string;
+  fecha: string;
 }

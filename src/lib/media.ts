@@ -97,8 +97,11 @@ function drawScaled(img: CanvasImageSource & { width: number; height: number }, 
   return canvas.toDataURL('image/jpeg', quality);
 }
 
-/** Reduce la foto del recibo (máx. 1280 px) y crea una miniatura para el chat. */
-export async function prepareReceiptPhoto(file: File): Promise<{ image: string; thumb: string }> {
+/**
+ * Reduce la imagen (máx. 1600 px, suficiente para leer extractos con letra
+ * pequeña) y crea una miniatura para el chat.
+ */
+export async function prepareImage(file: File): Promise<{ image: string; thumb: string }> {
   const img = await loadImage(file);
-  return { image: drawScaled(img, 1280, 0.82), thumb: drawScaled(img, 220, 0.7) };
+  return { image: drawScaled(img, 1600, 0.85), thumb: drawScaled(img, 240, 0.7) };
 }

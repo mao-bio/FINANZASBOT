@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import {
   Camera,
   ChartPie,
+  ImagePlus,
+  Images,
   CircleAlert,
   CircleCheck,
   Lightbulb,
@@ -15,26 +17,30 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import type { MensajeHistorial, Movimiento, Resumen, RespuestaChat } from '../../shared/types';
+import type { AccionGuardar, AnalisisImagen, MensajeHistorial, Movimiento, ResultadoAcciones, Resumen } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
 import { api, SessionExpiredError } from '../lib/api';
-import { MAX_RECORDING_SECONDS, pickAudioMimeType, prepareReceiptPhoto, recordingToWav } from '../lib/media';
+import { MAX_RECORDING_SECONDS, pickAudioMimeType, prepareImage, recordingToWav } from '../lib/media';
 import { TxRow } from './TxRow';
+import AnalysisCard, { type EstadoAnalisis } from './AnalysisCard';
+import { Sheet } from './Dialogs';
 
 type ChatMsg =
   | { id: string; kind: 'user'; text: string; thumb?: string }
   | { id: string; kind: 'bot'; text: string }
   | { id: string; kind: 'tx'; tx: Movimiento; undone?: boolean }
-  | { id: string; kind: 'note'; text: string; tone: 'cuenta' | 'presupuesto' | 'error' };
+  | { id: string; kind: 'note'; text: string; tone: 'cuenta' | 'presupuesto' | 'error' }
+  | { id: string; kind: 'analysis'; data: AnalisisImagen; estado: EstadoAnalisis };
 
 const STORAGE_KEY = 'fb_chat_v3';
 const SUGGESTIONS = ['¿Cuánto tengo?', '¿Cómo voy este mes?', '¿En qué gasto más?', 'Dame un consejo para ahorrar'];
-const PROMPTS: { text: string; Icon: LucideIcon }[] = [
+const PROMPTS: { text: string; Icon: LucideIcon; attach?: boolean }[] = [
+  { text: 'Subir una factura, recibo o pantallazo', Icon: ImagePlus, attach: true },
   { text: '¿Cuánto tengo?', Icon: Wallet },
   { text: '¿En qué gasto más este mes?', Icon: ChartPie },
-  { text: '¿Cómo voy con mis presupuestos?', Icon: Target },
   { text: 'Dame un consejo para ahorrar', Icon: Lightbulb },
 ];
+const MAX_IMAGES = 5;
 const NOTE_ICONS: Record<'cuenta' | 'presupuesto' | 'error', LucideIcon> = {
   cuenta: Wallet,
   presupuesto: Target,
@@ -83,7 +89,7 @@ export default function ChatView(props: {
   summary: Resumen | null;
   initialPrompt: string | null;
   onPromptUsed: () => void;
-  onResult: (r: RespuestaChat) => void;
+  onResult: (r: { applied: ResultadoAcciones; summary: Resumen }) => void;
   onUndo: (id: number) => Promise<boolean>;
   onSessionExpired: () => void;
 }) {
@@ -91,10 +97,13 @@ export default function ChatView(props: {
   const [messages, setMessages] = useState<ChatMsg[]>(loadMessages);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState('');
+  const [attachOpen, setAttachOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const cancelledRef = useRef(false);
   const messagesRef = useRef(messages);
@@ -132,7 +141,18 @@ export default function ChatView(props: {
   const push = (...msgs: ChatMsg[]) => setMessages((prev) => [...prev, ...msgs]);
   const pushError = (text: string) => push({ id: newId(), kind: 'note', tone: 'error', text });
 
-  async function send(payload: { message?: string; audio?: string; image?: string }, userMsg: Extract<ChatMsg, { kind: 'user' }>) {
+  /** Tiquetes de lo que se guardó (con Deshacer) y avisos de cuentas o presupuestos nuevos. */
+  function appliedMessages(applied: ResultadoAcciones): ChatMsg[] {
+    return [
+      ...applied.movimientos.map((tx): ChatMsg => ({ id: newId(), kind: 'tx', tx })),
+      ...applied.cuentasCreadas.map((nombre): ChatMsg => ({ id: newId(), kind: 'note', tone: 'cuenta', text: `Nueva cuenta: ${nombre}` })),
+      ...applied.presupuestos.map(
+        (p): ChatMsg => ({ id: newId(), kind: 'note', tone: 'presupuesto', text: `Presupuesto de ${p.categoria}: ${fmtCOP(p.monto)} al mes` }),
+      ),
+    ];
+  }
+
+  async function send(payload: { message?: string; audio?: string }, userMsg: Extract<ChatMsg, { kind: 'user' }>) {
     const history = toHistory(messagesRef.current);
     push(userMsg);
     setBusy(true);
@@ -141,14 +161,7 @@ export default function ChatView(props: {
       if (r.transcript) {
         setMessages((prev) => prev.map((m) => (m.id === userMsg.id ? { ...m, text: r.transcript! } : m)));
       }
-      push(
-        { id: newId(), kind: 'bot', text: r.reply },
-        ...r.applied.movimientos.map((tx): ChatMsg => ({ id: newId(), kind: 'tx', tx })),
-        ...r.applied.cuentasCreadas.map((nombre): ChatMsg => ({ id: newId(), kind: 'note', tone: 'cuenta', text: `Nueva cuenta: ${nombre}` })),
-        ...r.applied.presupuestos.map(
-          (p): ChatMsg => ({ id: newId(), kind: 'note', tone: 'presupuesto', text: `Presupuesto de ${p.categoria}: ${fmtCOP(p.monto)} al mes` }),
-        ),
-      );
+      push({ id: newId(), kind: 'bot', text: r.reply }, ...appliedMessages(r.applied));
       onResult(r);
     } catch (err) {
       if (err instanceof SessionExpiredError) return onSessionExpired();
@@ -170,16 +183,62 @@ export default function ChatView(props: {
     sendText(input);
   }
 
-  async function handlePhoto(file: File | undefined) {
-    if (!file) return;
+  /** Analiza una o varias imágenes, una por una, y muestra una tarjeta de revisión por cada una. */
+  async function handleImages(files: FileList | null) {
+    const list = Array.from(files ?? []).filter((f) => f.type.startsWith('image/') || f.type === '');
+    if (!list.length || busy) return;
+    if (list.length > MAX_IMAGES) pushError(`Puedo revisar hasta ${MAX_IMAGES} imágenes a la vez; tomé las primeras ${MAX_IMAGES}.`);
     const note = input.trim();
     setInput('');
+    setBusy(true);
     try {
-      const { image, thumb } = await prepareReceiptPhoto(file);
-      await send({ image, message: note }, { id: newId(), kind: 'user', text: note || 'Foto de un recibo', thumb });
-    } catch {
-      pushError('No pude abrir esa foto. Intenta con otra.');
+      for (const [i, file] of list.slice(0, MAX_IMAGES).entries()) {
+        let prepared: { image: string; thumb: string };
+        try {
+          prepared = await prepareImage(file);
+        } catch {
+          pushError(`No pude abrir "${file.name || 'la imagen'}". Intenta con otra.`);
+          continue;
+        }
+        push({ id: newId(), kind: 'user', text: i === 0 && note ? note : 'Imagen para analizar', thumb: prepared.thumb });
+        setBusyLabel(list.length > 1 ? `Analizando imagen ${i + 1} de ${Math.min(list.length, MAX_IMAGES)}…` : 'Analizando la imagen…');
+        try {
+          const data = await api.analyzeImage(prepared.image, note);
+          push({ id: newId(), kind: 'analysis', data, estado: 'pendiente' });
+        } catch (err) {
+          if (err instanceof SessionExpiredError) return onSessionExpired();
+          pushError(err instanceof Error ? err.message : 'No pude analizar la imagen.');
+        }
+      }
+    } finally {
+      setBusy(false);
+      setBusyLabel('');
     }
+  }
+
+  const setEstado = (id: string, estado: EstadoAnalisis) =>
+    setMessages((prev) => prev.map((m) => (m.id === id && m.kind === 'analysis' ? { ...m, estado } : m)));
+
+  async function saveAnalysis(id: string, acciones: AccionGuardar[]): Promise<boolean> {
+    try {
+      const r = await api.applyMovements(acciones);
+      setEstado(id, 'guardado');
+      push(...appliedMessages(r.applied), ...r.applied.avisos.map((text): ChatMsg => ({ id: newId(), kind: 'note', tone: 'error', text })));
+      onResult(r);
+      return true;
+    } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        onSessionExpired();
+        return false;
+      }
+      pushError(err instanceof Error ? err.message : 'No se pudo guardar.');
+      return false;
+    }
+  }
+
+  function pick(ref: RefObject<HTMLInputElement | null>) {
+    setAttachOpen(false);
+    ref.current?.click();
   }
 
   async function startRecording() {
@@ -260,10 +319,18 @@ export default function ChatView(props: {
               <Sparkles size={40} />
             </span>
             <h2>Hola, {user}. ¿Qué anotamos hoy?</h2>
-            <p>Escríbeme como le hablarías a un amigo, mándame una nota de voz o la foto de un recibo. Yo llevo las cuentas.</p>
+            <p>
+              Escríbeme como le hablarías a un amigo, mándame una nota de voz o sube la foto de una factura o un pantallazo del banco. Yo
+              llevo las cuentas.
+            </p>
             <div className="prompt-grid">
-              {PROMPTS.map(({ text, Icon }) => (
-                <button key={text} className="prompt-card" onClick={() => sendText(text)} disabled={busy}>
+              {PROMPTS.map(({ text, Icon, attach }) => (
+                <button
+                  key={text}
+                  className={`prompt-card${attach ? ' accent' : ''}`}
+                  onClick={() => (attach ? setAttachOpen(true) : sendText(text))}
+                  disabled={busy}
+                >
                   <Icon size={20} color="var(--primary)" aria-hidden="true" />
                   {text}
                 </button>
@@ -277,7 +344,7 @@ export default function ChatView(props: {
             return (
               <div key={m.id} className="msg user">
                 <div className="bubble">
-                  {m.thumb && <img src={m.thumb} alt="Foto del recibo enviada" />}
+                  {m.thumb && <img src={m.thumb} alt="Imagen enviada" />}
                   {m.text}
                 </div>
               </div>
@@ -313,6 +380,20 @@ export default function ChatView(props: {
               </div>
             );
           }
+          if (m.kind === 'analysis') {
+            return (
+              <div key={m.id} className="msg system">
+                <AnalysisCard
+                  data={m.data}
+                  estado={m.estado}
+                  cuentas={summary?.cuentas ?? []}
+                  categorias={summary?.categorias ?? { gasto: [], ingreso: [] }}
+                  onSave={(acciones) => saveAnalysis(m.id, acciones)}
+                  onDiscard={() => setEstado(m.id, 'descartado')}
+                />
+              </div>
+            );
+          }
           const Icon = NOTE_ICONS[m.tone];
           return (
             <div key={m.id} className="msg system">
@@ -328,12 +409,13 @@ export default function ChatView(props: {
             <span className="aura-orb sm" aria-hidden="true">
               <Sparkles size={14} />
             </span>
-            <div className="bubble">
-              <span className="typing" aria-label="Aura está pensando">
+            <div className="bubble busy-bubble">
+              <span className="typing" aria-label={busyLabel || 'Aura está pensando'}>
                 <span />
                 <span />
                 <span />
               </span>
+              {busyLabel && <span className="busy-label">{busyLabel}</span>}
             </div>
           </div>
         )}
@@ -366,20 +448,9 @@ export default function ChatView(props: {
             </div>
           ) : (
             <>
-              <button type="button" className="icon-btn" onClick={() => fileRef.current?.click()} disabled={busy} aria-label="Tomar foto de un recibo">
-                <Camera size={22} />
+              <button type="button" className="icon-btn" onClick={() => setAttachOpen(true)} disabled={busy} aria-label="Subir una imagen para analizar">
+                <ImagePlus size={22} />
               </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                hidden
-                onChange={(e) => {
-                  void handlePhoto(e.target.files?.[0]);
-                  e.target.value = '';
-                }}
-              />
               <form onSubmit={handleSubmit}>
                 <input
                   type="text"
@@ -406,6 +477,58 @@ export default function ChatView(props: {
           )}
         </div>
       </div>
+
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        onChange={(e) => {
+          void handleImages(e.target.files);
+          e.target.value = '';
+        }}
+      />
+      <input
+        ref={galleryRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        data-testid="gallery-input"
+        onChange={(e) => {
+          void handleImages(e.target.files);
+          e.target.value = '';
+        }}
+      />
+
+      {attachOpen && (
+        <Sheet title="Analizar una imagen" onClose={() => setAttachOpen(false)}>
+          <div className="menu-list">
+            <button className="menu-item" onClick={() => pick(cameraRef)}>
+              <Camera size={22} aria-hidden="true" />
+              <span>
+                Tomar foto
+                <small>De una factura, recibo o tiquete</small>
+              </span>
+            </button>
+            <button className="menu-item" onClick={() => pick(galleryRef)}>
+              <Images size={22} aria-hidden="true" />
+              <span>
+                Subir de la galería
+                <small>Pantallazos de Nequi, Bancolombia, extractos… hasta {MAX_IMAGES} a la vez</small>
+              </span>
+            </button>
+          </div>
+          <p className="hint sheet-hint">
+            <Sparkles size={18} aria-hidden="true" />
+            <span>
+              Leo el comercio, la fecha, el total y cada movimiento. Antes de guardar te muestro todo para que lo revises. Si escribes algo
+              antes de subirla (por ejemplo <em>"pagué con Nequi"</em>), lo tengo en cuenta.
+            </span>
+          </p>
+        </Sheet>
+      )}
     </div>
   );
 }

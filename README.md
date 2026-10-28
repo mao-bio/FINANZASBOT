@@ -18,7 +18,7 @@ Se instala en el celular como una app más (sin tienda de apps).
 | :--- | :--- |
 | 💬 **Chat con Aura** | Escribes como le hablarías a un amigo y la IA entiende montos ("50k", "2 palos", "1.5 millones"), fechas ("ayer"), categorías y cuentas. Un mensaje puede traer varios movimientos. |
 | 🎤 **Notas de voz** | Grabas el gasto y Whisper (en Workers AI) lo transcribe. |
-| 📷 **Foto de recibos** | Le tomas foto a la factura y la IA lee el total y el comercio. |
+| 🖼️ **Analiza imágenes** | Tomas una foto o subes desde la galería (hasta 5 a la vez) facturas, recibos, comprobantes de Nequi/Bancolombia, pantallazos del banco o extractos. La IA reconoce qué es, lee comercio, fecha, total, productos y cada movimiento, y te los muestra para revisar, corregir y guardar. Avisa si alguno parece repetido. |
 | 🏦 **Varias cuentas** | Efectivo, bancos, Nequi/Daviplata, tarjetas de crédito y ahorros, cada una con su saldo. Transferencias entre cuentas, pagos de tarjeta y ajustes de saldo. |
 | 🎯 **Presupuestos** | Topes mensuales por categoría con avisos claros: *vas bien*, *ojo*, *te pasaste*. |
 | 📊 **Resumen** | Cuánto te entró, cuánto gastaste y en qué, más la evolución de los últimos 6 meses. |
@@ -52,7 +52,7 @@ Si mencionas una cuenta que no existe, Aura la crea sola. Si no dices con qué p
 Celular (PWA React)  ──►  Cloudflare Worker (Hono)  ──►  D1 (SQLite): cuentas, movimientos, presupuestos
                                │
                                └──►  Workers AI
-                                      • Llama 4 Scout: entiende mensajes, lee recibos y redacta las respuestas
+                                      • Llama 4 Scout: entiende mensajes, analiza imágenes y redacta las respuestas
                                       • Whisper large v3 turbo: transcribe notas de voz
 ```
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bogotaDay, bogotaMonth, monthRange, resolveTxDate, shiftMonth } from '../worker/dates';
 import { normalizeCategory, normalizeGroup } from '../worker/categories';
 import { displayName, findAccount, inferKind } from '../worker/accounts';
-import { parseJsonOutput, sanitizeActions } from '../worker/ai';
+import { parseJsonOutput, sanitizeActions, sanitizeImageAnalysis } from '../worker/ai';
 import type { Cuenta } from '../shared/types';
 
 describe('fechas en hora de Colombia', () => {
@@ -88,5 +88,25 @@ describe('salida del modelo', () => {
       { accion: 'gasto', monto: 20000, categoria: '', descripcion: '', cuenta: '', cuenta_destino: '', tipo_cuenta: '', fecha: '' },
     ]);
     expect(sanitizeActions(null)).toEqual([]);
+  });
+});
+
+describe('análisis de imágenes', () => {
+  it('limpia lo que devuelve el modelo', () => {
+    const out = sanitizeImageAnalysis({
+      tipo_documento: 'meme',
+      resumen: 'x'.repeat(500),
+      fecha: '26/10/2026',
+      total: -5,
+      items: 'nada',
+      movimientos: [{ accion: 'gasto', monto: 1000 }, { accion: 'presupuesto', monto: 1 }],
+    });
+    expect(out.tipoDocumento).toBe('otro');
+    expect(out.resumen).toHaveLength(240);
+    expect(out.fecha).toBe('');
+    expect(out.total).toBe(0);
+    expect(out.items).toEqual([]);
+    expect(out.acciones.map((a) => a.accion)).toEqual(['gasto']);
+    expect(sanitizeImageAnalysis(null).acciones).toEqual([]);
   });
 });
