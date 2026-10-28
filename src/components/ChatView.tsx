@@ -6,12 +6,15 @@ import {
   Images,
   CircleAlert,
   CircleCheck,
+  CircleX,
+  Flag,
   Lightbulb,
   Mic,
   Send,
   Sparkles,
   Square,
   Target,
+  TriangleAlert,
   Undo2,
   Wallet,
   X,
@@ -20,6 +23,7 @@ import {
 import type { AccionGuardar, AnalisisImagen, MensajeHistorial, Movimiento, ResultadoAcciones, Resumen } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
 import { api, SessionExpiredError } from '../lib/api';
+import { longDay } from '../lib/labels';
 import { MAX_RECORDING_SECONDS, pickAudioMimeType, prepareImage, recordingToWav } from '../lib/media';
 import { TxRow } from './TxRow';
 import AnalysisCard, { type EstadoAnalisis } from './AnalysisCard';
@@ -29,7 +33,7 @@ type ChatMsg =
   | { id: string; kind: 'user'; text: string; thumb?: string }
   | { id: string; kind: 'bot'; text: string }
   | { id: string; kind: 'tx'; tx: Movimiento; undone?: boolean }
-  | { id: string; kind: 'note'; text: string; tone: 'cuenta' | 'presupuesto' | 'error' }
+  | { id: string; kind: 'note'; text: string; tone: NoteTone }
   | { id: string; kind: 'analysis'; data: AnalisisImagen; estado: EstadoAnalisis };
 
 const STORAGE_KEY = 'fb_chat_v3';
@@ -41,9 +45,14 @@ const PROMPTS: { text: string; Icon: LucideIcon; attach?: boolean }[] = [
   { text: 'Dame un consejo para ahorrar', Icon: Lightbulb },
 ];
 const MAX_IMAGES = 5;
-const NOTE_ICONS: Record<'cuenta' | 'presupuesto' | 'error', LucideIcon> = {
+type NoteTone = 'cuenta' | 'presupuesto' | 'meta' | 'warning' | 'critical' | 'error';
+
+const NOTE_ICONS: Record<NoteTone, LucideIcon> = {
   cuenta: Wallet,
   presupuesto: Target,
+  meta: Flag,
+  warning: TriangleAlert,
+  critical: CircleX,
   error: CircleAlert,
 };
 
@@ -149,6 +158,10 @@ export default function ChatView(props: {
       ...applied.presupuestos.map(
         (p): ChatMsg => ({ id: newId(), kind: 'note', tone: 'presupuesto', text: `Presupuesto de ${p.categoria}: ${fmtCOP(p.monto)} al mes` }),
       ),
+      ...applied.metas.map(
+        (m): ChatMsg => ({ id: newId(), kind: 'note', tone: 'meta', text: `Nueva meta: ${m.nombre}, ${fmtCOP(m.monto)} para el ${longDay(m.fecha)}` }),
+      ),
+      ...applied.alertas.map((a): ChatMsg => ({ id: newId(), kind: 'note', tone: a.nivel, text: `${a.titulo}. ${a.mensaje}` })),
     ];
   }
 
@@ -397,7 +410,10 @@ export default function ChatView(props: {
           const Icon = NOTE_ICONS[m.tone];
           return (
             <div key={m.id} className="msg system">
-              <div className={`note${m.tone === 'error' ? ' error' : ''}`} role={m.tone === 'error' ? 'alert' : undefined}>
+              <div
+                className={`note${m.tone === 'error' || m.tone === 'warning' || m.tone === 'critical' ? ` ${m.tone}` : ''}`}
+                role={m.tone === 'error' || m.tone === 'critical' ? 'alert' : undefined}
+              >
                 <Icon size={16} aria-hidden="true" /> {m.text}
               </div>
             </div>

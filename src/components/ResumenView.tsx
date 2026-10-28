@@ -55,6 +55,7 @@ function Ring({ pct }: { pct: number | null }) {
   );
 }
 
+/** Panel "Resumen" de la pestaña Análisis. */
 export default function ResumenView(props: { summary: Resumen; onSummary: (s: Resumen) => void; run: Run }) {
   const { summary, onSummary, run } = props;
   const [editing, setEditing] = useState<Presupuesto | 'new' | null>(null);
@@ -66,12 +67,7 @@ export default function ResumenView(props: { summary: Resumen; onSummary: (s: Re
   const hayHistorico = historico.some((h) => h.ingresos || h.gastos);
 
   return (
-    <div className="screen">
-      <header className="screen-header">
-        <h1>Resumen</h1>
-        <span className="pill">{monthName(mes.mes)}</span>
-      </header>
-
+    <>
       <section className="card month-card" aria-label="Este mes">
         <Ring pct={mes.ingresos > 0 ? mes.gastos / mes.ingresos : null} />
         <div className="stat-list">
@@ -251,7 +247,7 @@ export default function ResumenView(props: { summary: Resumen; onSummary: (s: Re
           run={run}
         />
       )}
-    </div>
+    </>
   );
 }
 

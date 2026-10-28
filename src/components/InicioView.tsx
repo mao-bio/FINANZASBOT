@@ -1,4 +1,4 @@
-import { ArrowDownLeft, ArrowUpRight, Plus, Sparkles, Star } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, ChevronRight, CircleAlert, Plus, Sparkles, Star, TriangleAlert } from 'lucide-react';
 import type { Cuenta, Movimiento, Resumen } from '../../shared/types';
 import { fmtCOP } from '../../shared/format';
 import { KIND_ICONS, KIND_SHORT, greeting, monthName } from '../lib/labels';
@@ -59,7 +59,7 @@ export default function InicioView(props: {
   onOpenAccount: (c: Cuenta | 'new') => void;
   onOpenTx: (m: Movimiento) => void;
   onAskAura: (prompt?: string) => void;
-  onGo: (tab: 'resumen' | 'historial') => void;
+  onGo: (to: 'analisis' | 'hallazgos' | 'historial' | 'cuentas') => void;
 }) {
   const { user, summary, recent } = props;
   const { totales, mes } = summary;
@@ -91,6 +91,34 @@ export default function InicioView(props: {
         </div>
       </section>
 
+      {summary.alertas.length > 0 && (
+        <div className="alert-list" role="list" aria-label="Alertas de presupuesto">
+          {summary.alertas.slice(0, 2).map((a) => (
+            <div role="listitem" key={a.categoria}>
+              <button className={`alert-card status-${a.nivel}`} onClick={() => props.onGo('hallazgos')}>
+                {a.nivel === 'critical' ? <CircleAlert size={20} aria-hidden="true" /> : <TriangleAlert size={20} aria-hidden="true" />}
+                <div>
+                  <strong>{a.titulo}</strong>
+                  <span>{a.mensaje}</span>
+                </div>
+                <ChevronRight size={18} aria-hidden="true" className="alert-go" />
+              </button>
+            </div>
+          ))}
+          {summary.alertas.length > 2 && (
+            <button className="link-btn alert-more" onClick={() => props.onGo('hallazgos')}>
+              Ver {summary.alertas.length - 2 === 1 ? 'la otra alerta' : `las otras ${summary.alertas.length - 2} alertas`}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="section-head carousel-head">
+        <h2>Tus cuentas</h2>
+        <button className="link-btn" onClick={() => props.onGo('cuentas')}>
+          Ver todas
+        </button>
+      </div>
       <div className="card-carousel" role="list" aria-label="Tus cuentas">
         {summary.cuentas.map((c) => (
           <div role="listitem" key={c.id} style={{ display: 'contents' }}>
@@ -105,8 +133,8 @@ export default function InicioView(props: {
       <section className="section" aria-label={`Resumen de ${monthName(mes.mes)}`}>
         <div className="section-head">
           <h2>{monthName(mes.mes).split(' de ')[0]}</h2>
-          <button className="link-btn" onClick={() => props.onGo('resumen')}>
-            Ver resumen
+          <button className="link-btn" onClick={() => props.onGo('analisis')}>
+            Ver análisis
           </button>
         </div>
         <div className="month-tiles">

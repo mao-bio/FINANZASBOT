@@ -1,6 +1,6 @@
 // Service worker de FinanzasBot: guarda la interfaz para que la app abra rápido
 // (incluso con mala señal). Los datos (/api/*) siempre van a la red.
-const CACHE = 'finanzasbot-v2';
+const CACHE = 'finanzasbot-v3';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -48,5 +48,16 @@ self.addEventListener('fetch', (event) => {
           return res;
         }),
     ),
+  );
+});
+
+// Al tocar una alerta de presupuesto, abre la app (o la trae al frente si ya está abierta).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const abierta = list.find((c) => 'focus' in c);
+      return abierta ? abierta.focus() : self.clients.openWindow('/');
+    }),
   );
 });

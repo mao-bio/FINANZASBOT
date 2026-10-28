@@ -43,6 +43,9 @@ import {
   transcribe,
 } from './ai';
 import { inferKind, isKind } from './accounts';
+import { getInsights } from './insights';
+import { createGoal, deleteGoal, listGoals, updateGoal } from './goals';
+import { deleteScenario, listScenarios, saveScenario } from './scenarios';
 import { bogotaDay } from './dates';
 import { fmtCOP } from '../shared/format';
 
@@ -218,7 +221,8 @@ app.post('/api/chat', bodyLimit({ maxSize: 14 * 1024 * 1024 }), async (c) => {
     descripcion: m.descripcion,
     cuenta: m.cuenta_destino ? `${m.cuenta} → ${m.cuenta_destino}` : m.cuenta,
   }));
-  const context = await buildContext(db, summary, applied, recent);
+  const [metas, hallazgos] = await Promise.all([listGoals(db), getInsights(db, summary)]);
+  const context = await buildContext(db, summary, applied, recent, { metas, hallazgos });
 
   let reply = '';
   try {
@@ -249,9 +253,43 @@ app.post('/api/movements/apply', async (c) => {
   const body = await c.req.json<{ acciones?: unknown }>();
   if (!Array.isArray(body.acciones) || body.acciones.length === 0) throw new UserError('No hay movimientos para guardar.');
   if (body.acciones.length > MAX_BATCH) throw new UserError(`Son demasiados movimientos de una vez (máximo ${MAX_BATCH}).`);
-  const acciones = sanitizeActions({ acciones: body.acciones }).filter((a) => a.accion !== 'presupuesto');
+  const acciones = sanitizeActions({ acciones: body.acciones }).filter((a) => a.accion !== 'presupuesto' && a.accion !== 'meta');
   const applied = await applyActions(c.env.DB, acciones, 'foto', new Date(), MAX_BATCH);
   return c.json({ applied, summary: await getSummary(c.env.DB) });
+});
+
+// ─── Análisis, metas y simulador ──────────────────────────────────────────────
+
+app.get('/api/insights', async (c) => c.json(await getInsights(c.env.DB, await getSummary(c.env.DB))));
+
+app.get('/api/goals', async (c) => c.json(await listGoals(c.env.DB)));
+
+app.post('/api/goals', async (c) => {
+  await createGoal(c.env.DB, await c.req.json());
+  return c.json(await listGoals(c.env.DB));
+});
+
+app.patch('/api/goals/:id', async (c) => {
+  await updateGoal(c.env.DB, Number(c.req.param('id')), await c.req.json());
+  return c.json(await listGoals(c.env.DB));
+});
+
+app.delete('/api/goals/:id', async (c) => {
+  await deleteGoal(c.env.DB, Number(c.req.param('id')));
+  return c.json(await listGoals(c.env.DB));
+});
+
+app.get('/api/scenarios', async (c) => c.json(await listScenarios(c.env.DB)));
+
+app.post('/api/scenarios', async (c) => {
+  const body = await c.req.json<{ nombre?: unknown; escenario?: unknown }>();
+  await saveScenario(c.env.DB, body.nombre, body.escenario);
+  return c.json(await listScenarios(c.env.DB));
+});
+
+app.delete('/api/scenarios/:id', async (c) => {
+  await deleteScenario(c.env.DB, Number(c.req.param('id')));
+  return c.json(await listScenarios(c.env.DB));
 });
 
 app.all('/api/*', (c) => c.json({ error: 'Ruta no encontrada' }, 404));

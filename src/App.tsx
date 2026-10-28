@@ -1,7 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import { ChartColumn, History, House, LogOut, RotateCcw, Sparkles, Wallet, type LucideIcon } from 'lucide-react';
-import type { Cuenta, Movimiento, ResultadoAcciones, Resumen } from '../shared/types';
+import { Bell, BellOff, ChartColumn, History, House, LogOut, RotateCcw, Sparkles, Target, type LucideIcon } from 'lucide-react';
+import type { Cuenta, Hallazgos, Meta, Movimiento, ResultadoAcciones, Resumen } from '../shared/types';
 import { api, SessionExpiredError } from './lib/api';
+import { disableNotifications, enableNotifications, notificationsEnabled, notificationsSupported, notify } from './lib/notify';
 import LoginPage from './components/LoginPage';
 import InicioView from './components/InicioView';
 import ChatView, { clearChatHistory } from './components/ChatView';
@@ -10,18 +11,27 @@ import HistorialView from './components/HistorialView';
 import { TxSheet } from './components/TxRow';
 import { ConfirmDialog, Sheet } from './components/Dialogs';
 
-// Las gráficas (recharts) pesan: se cargan solo al abrir Resumen.
-const ResumenView = lazy(() => import('./components/ResumenView'));
+// Las gráficas (recharts) pesan: Análisis y Metas se cargan solo al abrirlas.
+const AnalisisView = lazy(() => import('./components/AnalisisView'));
+const MetasView = lazy(() => import('./components/MetasView'));
 
-type Tab = 'inicio' | 'resumen' | 'aura' | 'cuentas' | 'historial';
+type Tab = 'inicio' | 'analisis' | 'aura' | 'metas' | 'historial' | 'cuentas';
+type AnalisisPanel = 'resumen' | 'hallazgos' | 'comparar';
 
+// Cuentas no va en la barra: se abre desde Inicio.
 const TABS: { id: Tab; label: string; Icon: LucideIcon }[] = [
   { id: 'inicio', label: 'Inicio', Icon: House },
-  { id: 'resumen', label: 'Resumen', Icon: ChartColumn },
+  { id: 'analisis', label: 'Análisis', Icon: ChartColumn },
   { id: 'aura', label: 'Aura', Icon: Sparkles },
-  { id: 'cuentas', label: 'Cuentas', Icon: Wallet },
+  { id: 'metas', label: 'Metas', Icon: Target },
   { id: 'historial', label: 'Movimientos', Icon: History },
 ];
+
+const loadingScreen = (
+  <div className="screen">
+    <div className="skeleton" aria-label="Cargando…" />
+  </div>
+);
 
 export default function App() {
   const [user, setUser] = useState<string | null>(null);
@@ -50,7 +60,11 @@ const byDateDesc = (a: Movimiento, b: Movimiento) => (a.fecha < b.fecha ? 1 : a.
 
 function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) {
   const [tab, setTab] = useState<Tab>('inicio');
+  const [analisisPanel, setAnalisisPanel] = useState<AnalisisPanel>('resumen');
   const [summary, setSummary] = useState<Resumen | null>(null);
+  const [insights, setInsights] = useState<Hallazgos | null>(null);
+  const [goals, setGoals] = useState<Meta[] | null>(null);
+  const [notifOn, setNotifOn] = useState(notificationsEnabled);
   const [transactions, setTransactions] = useState<Movimiento[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [auraPrompt, setAuraPrompt] = useState<string | null>(null);
@@ -89,10 +103,23 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
     void loadTransactions();
   }, [run, loadTransactions]);
 
+  const loadInsights = useCallback(async () => {
+    const h = await run(api.insights);
+    if (h) setInsights(h);
+  }, [run]);
+
+  const loadGoals = useCallback(async () => {
+    const g = await run(api.goals);
+    if (g) setGoals(g);
+  }, [run]);
+
+  // Cada vez que entras a Análisis o Metas se recalculan los hallazgos (pudiste registrar gastos en el chat).
   useEffect(() => {
     if (tab === 'historial') void loadTransactions();
+    if (tab === 'analisis' || tab === 'metas') void loadInsights();
+    if (tab === 'metas') void loadGoals();
     window.scrollTo({ top: 0 });
-  }, [tab, loadTransactions]);
+  }, [tab, loadTransactions, loadInsights, loadGoals]);
 
   useEffect(() => {
     if (!toast) return;
@@ -105,6 +132,23 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
     if (r.applied.movimientos.length) {
       setTransactions((prev) => [...r.applied.movimientos, ...prev].sort(byDateDesc));
     }
+    void notify(r.applied.alertas);
+  }
+
+  function go(to: Tab | 'hallazgos') {
+    setAnalisisPanel(to === 'hallazgos' ? 'hallazgos' : 'resumen');
+    setTab(to === 'hallazgos' ? 'analisis' : to);
+  }
+
+  async function toggleNotifications() {
+    if (notifOn) {
+      disableNotifications();
+      setNotifOn(false);
+      return;
+    }
+    const ok = await enableNotifications();
+    setNotifOn(ok);
+    if (!ok) setToast('El navegador no dio permiso. Puedes activarlo en los ajustes del sitio; las alertas igual salen dentro de la app.');
   }
 
   async function deleteTransaction(id: number): Promise<boolean> {
@@ -134,6 +178,8 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
     if (res) {
       setSummary(res.summary);
       setTransactions([]);
+      setInsights(null);
+      setGoals([]);
       clearChatHistory();
       setTab('inicio');
     }
@@ -166,20 +212,25 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
             onOpenAccount={setEditingAccount}
             onOpenTx={setSelectedTx}
             onAskAura={askAura}
-            onGo={setTab}
+            onGo={go}
           />
-        ) : tab === 'resumen' ? (
-          <Suspense
-            fallback={
-              <div className="screen">
-                <div className="skeleton" aria-label="Cargando…" />
-              </div>
-            }
-          >
-            <ResumenView summary={summary} onSummary={setSummary} run={run} />
+        ) : tab === 'analisis' ? (
+          <Suspense fallback={loadingScreen}>
+            <AnalisisView
+              summary={summary}
+              insights={insights}
+              onSummary={setSummary}
+              onInsightsChanged={loadInsights}
+              run={run}
+              initialPanel={analisisPanel}
+            />
+          </Suspense>
+        ) : tab === 'metas' ? (
+          <Suspense fallback={loadingScreen}>
+            <MetasView summary={summary} insights={insights} goals={goals} onGoals={setGoals} run={run} onAskAura={askAura} />
           </Suspense>
         ) : tab === 'cuentas' ? (
-          <CuentasView summary={summary} onEdit={setEditingAccount} />
+          <CuentasView summary={summary} onEdit={setEditingAccount} onBack={() => setTab('inicio')} />
         ) : (
           <HistorialView transactions={transactions} onOpenTx={setSelectedTx} />
         )}
@@ -195,7 +246,7 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
               {label}
             </button>
           ) : (
-            <button key={id} className="tab" onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}>
+            <button key={id} className="tab" onClick={() => go(id)} aria-current={tab === id ? 'page' : undefined}>
               <span className="tab-icon">
                 <Icon size={22} aria-hidden="true" />
               </span>
@@ -223,6 +274,19 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
       {profileOpen && (
         <Sheet title={user} onClose={() => setProfileOpen(false)}>
           <div className="menu-list">
+            {notificationsSupported() && (
+              <button className="menu-item" role="switch" aria-checked={notifOn} onClick={toggleNotifications}>
+                {notifOn ? <Bell size={20} aria-hidden="true" /> : <BellOff size={20} aria-hidden="true" />}
+                <span>
+                  Avisos de presupuesto: {notifOn ? 'activos' : 'apagados'}
+                  <small>
+                    {notifOn
+                      ? 'Te aviso en el celular cuando llegues al 80% de un presupuesto o te pases'
+                      : 'Actívalos para recibir un aviso cuando te acerques a tus límites'}
+                  </small>
+                </span>
+              </button>
+            )}
             <button className="menu-item" onClick={() => setConfirm('logout')}>
               <LogOut size={20} aria-hidden="true" />
               <span>
@@ -234,7 +298,7 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
               <RotateCcw size={20} aria-hidden="true" />
               <span>
                 Borrar todo y empezar de cero
-                <small>Elimina movimientos, cuentas y presupuestos</small>
+                <small>Elimina movimientos, cuentas, presupuestos y metas</small>
               </span>
             </button>
           </div>
@@ -244,7 +308,7 @@ function Home({ user, onLoggedOut }: { user: string; onLoggedOut: () => void }) 
       {confirm && (
         <ConfirmDialog
           title={confirm === 'logout' ? `¿Salir, ${user}?` : '¿Borrar todo?'}
-          message={confirm === 'reset' ? 'Se borran todos tus movimientos, cuentas y presupuestos. Esto no se puede deshacer.' : undefined}
+          message={confirm === 'reset' ? 'Se borran todos tus movimientos, cuentas, presupuestos, metas y escenarios. Esto no se puede deshacer.' : undefined}
           confirmLabel={confirm === 'logout' ? 'Salir' : 'Borrar todo'}
           danger={confirm === 'reset'}
           icon={confirm === 'logout' ? LogOut : RotateCcw}

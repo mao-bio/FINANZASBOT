@@ -1,4 +1,5 @@
-import type { Cuenta, MensajeHistorial, ResultadoAcciones, Resumen, TipoDocumento } from '../shared/types';
+import type { Cuenta, Hallazgos, MensajeHistorial, Meta, ResultadoAcciones, Resumen, TipoDocumento } from '../shared/types';
+import { planMeta } from '../shared/plan';
 import { fmtCOP } from '../shared/format';
 import type { Accion } from './finance';
 import { spendByGroup } from './finance';
@@ -76,7 +77,7 @@ const STRING = { type: 'string' };
 const ACTION_ITEM = {
   type: 'object',
   properties: {
-    accion: { type: 'string', enum: ['gasto', 'ingreso', 'transferencia', 'saldo', 'presupuesto'] },
+    accion: { type: 'string', enum: ['gasto', 'ingreso', 'transferencia', 'saldo', 'presupuesto', 'meta'] },
     monto: { type: 'number' },
     categoria: STRING,
     descripcion: STRING,
@@ -118,18 +119,19 @@ ACCIONES POSIBLES:
 - "transferencia": movió plata entre SUS cuentas (de Bancolombia a Nequi, retiró del cajero = de banco a efectivo, pagó la tarjeta de crédito desde el banco, ahorró = pasó plata a una cuenta de ahorros).
 - "saldo": dice cuánto TIENE ahora en una cuenta ("tengo 300 mil en efectivo", "en Nequi me quedan 50 mil") o cuánto DEBE en una tarjeta de crédito ("debo 1.2 millones en la Visa"). El monto es el saldo actual, no un gasto.
 - "presupuesto": quiere ponerse un tope mensual para una categoría ("ponme 600 mil de presupuesto para comida"). En "categoria" va el grupo.
+- "meta": quiere ahorrar para algo con un valor ("quiero ahorrar 5 millones para una moto en diciembre"). monto = el valor de la meta, descripcion = para qué (1 a 3 palabras), fecha = cuándo la quiere lograr ("YYYY-MM-DD"; si dice solo un mes, el último día de ese mes; "" si no dice).
 
 CAMPOS:
 - monto: número entero en pesos. ${AMOUNT_RULES}
 - categoria: para gasto, EXACTAMENTE una de: ${EXPENSE_CATEGORIES.join(', ')}.
   Para ingreso, una de: ${INCOME_CATEGORIES.join(', ')}.
   Para presupuesto, uno de estos grupos: ${EXPENSE_GROUPS.join(', ')}.
-  Para transferencia o saldo: "".
+  Para transferencia, saldo o meta: "".
 - descripcion: 1 a 4 palabras con el detalle ("Almuerzo", "Uber al trabajo", "Quincena"). "" si no hay.
 - cuenta: nombre de la cuenta o medio de pago que mencionó ("Nequi", "la tarjeta", "efectivo", "Bancolombia"). En transferencias es la cuenta de ORIGEN. "" si no menciona ninguna.
 - cuenta_destino: solo en transferencias, la cuenta que recibe la plata. "" en los demás casos.
 - tipo_cuenta: tipo de la cuenta mencionada (en transferencias, el de la cuenta destino): efectivo, banco, billetera (Nequi, Daviplata), credito (tarjeta de crédito) o ahorro. "" si no mencionó cuenta.
-- fecha: "YYYY-MM-DD" solo si dice un día distinto a hoy ("ayer", "el sábado", "el 15"). "" si es de hoy o no lo dice.
+- fecha: "YYYY-MM-DD" solo si dice un día distinto a hoy ("ayer", "el sábado", "el 15"). "" si es de hoy o no lo dice. En metas es la fecha límite.
 
 REGLAS:
 - Si el mensaje es una pregunta, un saludo, una queja o charla ("¿cuánto tengo?", "¿en qué gasto más?", "hola", "gracias"), devuelve {"acciones": []}.
@@ -146,6 +148,8 @@ EJEMPLOS:
 "tengo 350 mil en efectivo" → {"acciones":[{"accion":"saldo","monto":350000,"categoria":"","descripcion":"","cuenta":"Efectivo","cuenta_destino":"","tipo_cuenta":"efectivo","fecha":""}]}
 "debo 1.2 millones en la Visa" → {"acciones":[{"accion":"saldo","monto":1200000,"categoria":"","descripcion":"","cuenta":"Visa","cuenta_destino":"","tipo_cuenta":"credito","fecha":""}]}
 "ponle 600 mil de presupuesto a la comida" → {"acciones":[{"accion":"presupuesto","monto":600000,"categoria":"Comida","descripcion":"","cuenta":"","cuenta_destino":"","tipo_cuenta":"","fecha":""}]}
+"quiero juntar 3 millones para el viaje de fin de año" → {"acciones":[{"accion":"meta","monto":3000000,"categoria":"","descripcion":"Viaje de fin de año","cuenta":"","cuenta_destino":"","tipo_cuenta":"","fecha":"${now.getUTCFullYear()}-12-31"}]}
+"¿cuánto me falta para la moto?" → {"acciones":[]}
 "¿cuánto llevo gastado este mes?" → {"acciones":[]}
 
 Responde SOLO con el JSON.`;
@@ -155,7 +159,7 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
-const VALID_ACTIONS = new Set(['gasto', 'ingreso', 'transferencia', 'saldo', 'presupuesto']);
+const VALID_ACTIONS = new Set(['gasto', 'ingreso', 'transferencia', 'saldo', 'presupuesto', 'meta']);
 
 export function sanitizeActions(parsed: Record<string, unknown> | null): Accion[] {
   const list = Array.isArray(parsed?.acciones) ? (parsed!.acciones as Record<string, unknown>[]) : [];
@@ -267,7 +271,7 @@ export function sanitizeImageAnalysis(parsed: Record<string, unknown> | null): I
     fecha: /^\d{4}-\d{2}-\d{2}$/.test(str(parsed?.fecha)) ? str(parsed?.fecha) : '',
     total: Number.isFinite(total) && total > 0 ? total : 0,
     items,
-    acciones: sanitizeActions({ acciones: parsed?.movimientos }).filter((a) => a.accion !== 'presupuesto'),
+    acciones: sanitizeActions({ acciones: parsed?.movimientos }).filter((a) => a.accion !== 'presupuesto' && a.accion !== 'meta'),
   };
 }
 
@@ -315,7 +319,41 @@ export async function transcribe(env: Env, audioBase64: string): Promise<string>
 // ─── 4. Respuesta de Aura ─────────────────────────────────────────────────────
 
 /** Todo lo que Aura necesita saber, con montos ya formateados para que no haga cuentas. */
-export async function buildContext(db: D1Database, summary: Resumen, applied: ResultadoAcciones, recent: unknown[], now = new Date()) {
+/** Metas y hallazgos resumidos, con cifras ya calculadas. */
+function planningContext(metas: Meta[], hallazgos: Hallazgos, hoy: string) {
+  const capacidad = hallazgos.base.capacidadMensual;
+  return {
+    capacidad_de_ahorro_mensual: fmtCOP(capacidad),
+    metas: metas.map((m) => {
+      const plan = planMeta({ meta: m.monto, ahorrado: m.ahorrado, fechaMeta: m.fecha, hoy, capacidadMensual: capacidad });
+      return {
+        nombre: m.nombre,
+        valor: fmtCOP(m.monto),
+        ahorrado: fmtCOP(m.ahorrado),
+        le_falta: fmtCOP(plan.falta),
+        fecha_limite: m.fecha,
+        ahorrar_por_dia: fmtCOP(plan.porDia),
+        ahorrar_por_semana: fmtCOP(plan.porSemana),
+        ahorrar_por_mes: fmtCOP(plan.porMes),
+        estado: plan.estado,
+        llegaria_ahorrando_lo_normal: plan.fechaProyectada,
+      };
+    }),
+    gastos_hormiga_30_dias: hallazgos.hormiga.slice(0, 3).map((h) => `${h.nombre}: ${h.veces} veces, ${fmtCOP(h.total)} (al año ${fmtCOP(h.anual)})`),
+    cobros_que_se_repiten: hallazgos.recurrentes.slice(0, 5).map((r) => `${r.nombre}: ${fmtCOP(r.monto)} al mes`),
+    categorias_por_encima_de_lo_habitual: hallazgos.porEncima.slice(0, 3).map((p) => `${p.grupo}: ${fmtCOP(p.actual)} vs ${fmtCOP(p.habitual)} normal a esta altura del mes`),
+    gastos_inusuales: hallazgos.inusuales.slice(0, 3).map((i) => `${i.descripcion} ${fmtCOP(i.monto)} el ${i.fecha} (lo normal en ${i.categoria} es ${fmtCOP(i.normal)})`),
+  };
+}
+
+export async function buildContext(
+  db: D1Database,
+  summary: Resumen,
+  applied: ResultadoAcciones,
+  recent: unknown[],
+  planning?: { metas: Meta[]; hallazgos: Hallazgos },
+  now = new Date(),
+) {
   const prevMonth = shiftMonth(bogotaMonth(now), -1);
   const prev = summary.historico.find((h) => h.mes === prevMonth);
   const prevByGroup = await spendByGroup(db, prevMonth);
@@ -353,10 +391,13 @@ export async function buildContext(db: D1Database, summary: Resumen, applied: Re
       porcentaje_usado: `${Math.round((p.gastado / p.monto) * 100)}%`,
     })),
     ultimos_movimientos: recent,
+    ...(planning ? planningContext(planning.metas, planning.hallazgos, bogotaDay(now)) : {}),
     lo_que_se_acaba_de_hacer: {
       movimientos_registrados: applied.movimientos.map(describeTx),
       cuentas_creadas: applied.cuentasCreadas,
       presupuestos_definidos: applied.presupuestos.map((p) => `${p.categoria}: ${fmtCOP(p.monto)} al mes`),
+      metas_creadas: applied.metas.map((m) => `${m.nombre}: ${fmtCOP(m.monto)} para el ${m.fecha}`),
+      alertas: applied.alertas.map((a) => `${a.titulo}. ${a.mensaje}`),
       avisos: applied.avisos,
     },
   };
@@ -381,10 +422,14 @@ function coachSystemPrompt(user: string, context: object): string {
 CÓMO RESPONDER:
 - Máximo 4 frases cortas. Nada de tecnicismos; si usas uno, explícalo en palabras simples.
 - Emojis con moderación (uno o dos).
-- Usa SOLO las cifras del CONTEXTO, copiadas tal cual (formato $ 1.250.000). No hagas sumas ni restas propias; si te preguntan algo que no está en el contexto, dilo con honestidad y sugiere cómo verlo en la app (pestañas Cuentas, Resumen o Historial).
+- Usa SOLO las cifras del CONTEXTO, copiadas tal cual (formato $ 1.250.000). No hagas sumas ni restas propias; si te preguntan algo que no está en el contexto, dilo con honestidad y sugiere cómo verlo en la app (pestañas Inicio, Análisis, Metas o Cuentas).
 - Si en "lo_que_se_acaba_de_hacer" hay movimientos, confírmalos en una frase. Si está vacío, NO digas que registraste o guardaste algo.
 - Si hay "avisos", explícalos con tacto.
 - Si se registró un gasto en una categoría con presupuesto, dile cuánto le queda. Si ya pasó del 80%, avísale con cariño.
+- Si se creó una meta, confírmala y dile cuánto debe ahorrar por semana y por mes (está en "metas").
+- Si pregunta por sus metas, usa "metas": cuánto le falta y cuánto ahorrar por día, semana y mes. Si el estado es "dificil" o "sin-capacidad", sugiérele mover la fecha o recortar gastos.
+- Si pregunta en qué se le va la plata, por gastos hormiga, suscripciones o gastos raros, usa los hallazgos del contexto y sugiere revisar la pestaña Análisis.
+- Para simular decisiones (moto, crédito, mudanza, cambio de empleo), invítalo a usar el simulador en la pestaña Metas.
 - Puedes dar consejos prácticos de ahorro y orden, pero no recomiendes inversiones ni productos financieros específicos.
 - No digas que eres una IA ni menciones el "contexto" o el JSON.
 
@@ -423,6 +468,10 @@ export function fallbackReply(applied: ResultadoAcciones): string {
   if (applied.presupuestos.length) {
     parts.push(`Presupuesto listo: ${applied.presupuestos.map((p) => `${p.categoria} ${fmtCOP(p.monto)} al mes`).join(', ')}.`);
   }
+  if (applied.metas.length) {
+    parts.push(`Meta creada: ${applied.metas.map((m) => `${m.nombre} por ${fmtCOP(m.monto)}`).join(', ')}. Mírala en la pestaña Metas.`);
+  }
+  parts.push(...applied.alertas.map((a) => `${a.titulo}. ${a.mensaje}`));
   parts.push(...applied.avisos);
   return parts.join(' ') || 'Uy parce, no te entendí bien. ¿Me lo repites con el monto? Por ejemplo: "gasté 20 mil en almuerzo". 😅';
 }
