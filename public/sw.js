@@ -1,6 +1,6 @@
 // Service worker de FinanzasBot: guarda la interfaz para que la app abra rápido
 // (incluso con mala señal). Los datos (/api/*) siempre van a la red.
-const CACHE = 'finanzasbot-v3';
+const CACHE = 'finanzasbot-v4';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -51,13 +51,62 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Al tocar una alerta de presupuesto, abre la app (o la trae al frente si ya está abierta).
+// ─── Notificaciones push (llegan aunque la app esté cerrada) ────────────────
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { mensaje: event.data ? event.data.text() : '' };
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.titulo || 'FinanzasBot', {
+      body: data.mensaje || '',
+      tag: data.tag || undefined,
+      renotify: Boolean(data.tag),
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      lang: 'es-CO',
+      data: { url: data.url || '/' },
+    }),
+  );
+});
+
+// Al tocarla, abre la app en la pantalla del aviso (o trae al frente la que ya está abierta).
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const url = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href;
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (list) => {
       const abierta = list.find((c) => 'focus' in c);
-      return abierta ? abierta.focus() : self.clients.openWindow('/');
+      if (!abierta) return self.clients.openWindow(url);
+      try {
+        const nueva = 'navigate' in abierta ? await abierta.navigate(url) : null;
+        return (nueva || abierta).focus();
+      } catch {
+        return abierta.focus();
+      }
     }),
+  );
+});
+
+// Si el navegador renueva la suscripción, se la pasamos al Worker sin que tengas que hacer nada.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      const res = await fetch('/api/push', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const { publicKey } = await res.json();
+      const b64 = publicKey.replace(/-/g, '+').replace(/_/g, '/');
+      const key = Uint8Array.from(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0));
+      const sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub.toJSON(), anterior: event.oldSubscription ? event.oldSubscription.endpoint : undefined }),
+      });
+    })(),
   );
 });

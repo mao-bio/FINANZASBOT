@@ -65,6 +65,18 @@ export interface Alerta {
   mensaje: string;
 }
 
+/** Tipos de notificación push que se pueden prender o apagar. */
+export type TipoAviso = 'presupuesto' | 'cobros' | 'metas' | 'diario';
+export type PreferenciasAvisos = Record<TipoAviso, boolean>;
+
+export interface EstadoPush {
+  /** Llave pública VAPID (base64url) para suscribir el navegador */
+  publicKey: string;
+  preferencias: PreferenciasAvisos;
+  /** Celulares o navegadores que reciben las notificaciones */
+  dispositivos: number;
+}
+
 export interface ResultadoAcciones {
   movimientos: Movimiento[];
   cuentasCreadas: string[];

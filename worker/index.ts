@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { AnalisisImagen, Fuente, MensajeHistorial, RespuestaChat } from '../shared/types';
@@ -46,6 +46,8 @@ import { inferKind, isKind } from './accounts';
 import { getInsights } from './insights';
 import { createGoal, deleteGoal, listGoals, updateGoal } from './goals';
 import { deleteScenario, listScenarios, saveScenario } from './scenarios';
+import { getPushState, removeSubscription, saveSubscription, sendToAll, setPreferences } from './push';
+import { notifyBudgetAlerts, runDailyNotifications } from './avisos';
 import { bogotaDay } from './dates';
 import { fmtCOP } from '../shared/format';
 
@@ -55,6 +57,20 @@ export const app = new Hono<AppEnv>();
 
 const PUBLIC_PATHS = new Set(['/api/login', '/api/session', '/api/logout']);
 const MAX_MEDIA_CHARS = 6 * 1024 * 1024;
+
+/** Trabajo que sigue después de responder (avisos push). En las pruebas no hay ExecutionContext: se espera. */
+function inBackground(c: Context<AppEnv>, task: Promise<unknown>): Promise<void> | undefined {
+  const safe = task.then(
+    () => undefined,
+    (err) => console.error('Falló una tarea en segundo plano:', err),
+  );
+  try {
+    c.executionCtx.waitUntil(safe);
+    return undefined;
+  } catch {
+    return safe;
+  }
+}
 
 app.onError((err, c) => {
   if (err instanceof UserError) return c.json({ error: err.message }, 400);
@@ -232,6 +248,7 @@ app.post('/api/chat', bodyLimit({ maxSize: 14 * 1024 * 1024 }), async (c) => {
   }
   if (!reply) reply = fallbackReply(applied);
 
+  await inBackground(c, notifyBudgetAlerts(db, applied.alertas));
   return c.json<RespuestaChat>({ reply, transcript, applied, summary });
 });
 
@@ -255,6 +272,7 @@ app.post('/api/movements/apply', async (c) => {
   if (body.acciones.length > MAX_BATCH) throw new UserError(`Son demasiados movimientos de una vez (máximo ${MAX_BATCH}).`);
   const acciones = sanitizeActions({ acciones: body.acciones }).filter((a) => a.accion !== 'presupuesto' && a.accion !== 'meta');
   const applied = await applyActions(c.env.DB, acciones, 'foto', new Date(), MAX_BATCH);
+  await inBackground(c, notifyBudgetAlerts(c.env.DB, applied.alertas));
   return c.json({ applied, summary: await getSummary(c.env.DB) });
 });
 
@@ -292,6 +310,41 @@ app.delete('/api/scenarios/:id', async (c) => {
   return c.json(await listScenarios(c.env.DB));
 });
 
+// ─── Notificaciones push ──────────────────────────────────────────────────────
+
+app.get('/api/push', async (c) => c.json(await getPushState(c.env.DB)));
+
+app.post('/api/push/subscribe', async (c) => {
+  const body = await c.req.json<{ subscription?: unknown; anterior?: unknown }>();
+  const dispositivos = await saveSubscription(c.env.DB, body.subscription, new URL(c.req.url).origin, c.req.header('User-Agent') ?? '', body.anterior);
+  return c.json({ ok: true, dispositivos });
+});
+
+app.post('/api/push/unsubscribe', async (c) => {
+  const body = await c.req.json<{ endpoint?: unknown }>();
+  return c.json({ ok: true, dispositivos: await removeSubscription(c.env.DB, body.endpoint) });
+});
+
+app.put('/api/push/preferences', async (c) => c.json(await setPreferences(c.env.DB, await c.req.json())));
+
+app.post('/api/push/test', async (c) => {
+  const res = await sendToAll(c.env.DB, {
+    titulo: '¡Listo, parce! 🔔',
+    mensaje: 'Así te van a llegar los avisos de FinanzasBot, aunque tengas la app cerrada.',
+    tag: 'prueba',
+    url: '/',
+  });
+  if (!res.enviadas && !res.fallidas && !res.vencidas) throw new UserError('Primero activa las notificaciones en este celular.');
+  if (!res.enviadas) throw new UserError('El servicio de notificaciones no recibió el aviso. Apágalas y vuelve a activarlas.');
+  return c.json(res);
+});
+
 app.all('/api/*', (c) => c.json({ error: 'Ruta no encontrada' }, 404));
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Cron Trigger (wrangler.jsonc): la revisión de cada noche para los avisos push.
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(runDailyNotifications(env, new Date(controller.scheduledTime)).then((enviados) => console.log('Avisos enviados:', enviados)));
+  },
+} satisfies ExportedHandler<Env>;

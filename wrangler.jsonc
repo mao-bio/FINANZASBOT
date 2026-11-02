@@ -20,6 +20,11 @@
       "database_name": "finanzasbot"
     }
   ],
+  // Cada noche a las 7:30 p. m. (hora de Colombia = 00:30 UTC) revisa presupuestos, cobros y metas
+  // y manda las notificaciones push, aunque la app esté cerrada.
+  "triggers": {
+    "crons": ["30 0 * * *"]
+  },
   "vars": {
     "APP_USERNAME": "Mario",
     "AI_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct"

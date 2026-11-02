@@ -47,6 +47,18 @@ const SCHEMA = [
     saved INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`,
+  `CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    device TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    last_ok_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS push_log (
+    key TEXT PRIMARY KEY,
+    sent_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS scenarios (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

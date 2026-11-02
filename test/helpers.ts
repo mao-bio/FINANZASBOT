@@ -38,7 +38,11 @@ export const baseEnv = env as unknown as Env;
 export async function resetDb(): Promise<void> {
   await ensureSchema(baseEnv.DB);
   await resetAll(baseEnv.DB);
-  await baseEnv.DB.prepare('DELETE FROM login_attempts').run();
+  await baseEnv.DB.batch([
+    baseEnv.DB.prepare('DELETE FROM login_attempts'),
+    baseEnv.DB.prepare('DELETE FROM push_subscriptions'),
+    baseEnv.DB.prepare(`DELETE FROM meta WHERE key IN ('push_prefs', 'push_subject')`),
+  ]);
 }
 
 export async function login(): Promise<string> {
